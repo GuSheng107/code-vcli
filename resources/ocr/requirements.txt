@@ -1,0 +1,11 @@
+# vcli Python 依赖（不含 torch/torchvision，由 init 阶段根据 CPU/GPU 模式单独安装）
+transformers==5.3.0
+huggingface_hub>=0.24.0
+safetensors>=0.4.0
+ultralytics>=8.3.0
+easyocr>=1.7.0
+Pillow>=10.0.0
+numpy>=1.24.0
+requests>=2.31.0
+einops>=0.7.0
+timm>=0.9.0

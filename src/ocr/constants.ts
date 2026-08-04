@@ -1,17 +1,31 @@
-export const OCR_FEATURE_VERSION = "1";
-export const OCR_RUNTIME_VERSION = "rapidocr-3.9.2+openvino";
-export const OCR_ENGINE = "rapidocr-openvino";
-export const OCR_MODEL_ID = "ppocr-v6-small";
-export const OCR_MODEL_DISPLAY = "PP-OCRv6 Quality";
+export const VISION_FEATURE_VERSION = "1";
+export const VISION_VENV_DIR_NAME = "venv";
+export const VISION_SCRIPT_FILE_NAME = "vcli_inference.py";
+export const VISION_REQUIREMENTS_FILE_NAME = "requirements.txt";
+export const VISION_MODELS_DIR_NAME = "models";
+export const VISION_STAGING_DIR_NAME = "staging";
+export const VISION_STATE_FILE_NAME = "model_state.json";
+export const VISION_FILES_DIR_NAME = "files";
 
-export const OCR_FEATURE_DIR_NAME = "features/ocr";
-export const OCR_STATE_FILE_NAME = "state.json";
-export const OCR_VENV_DIR_NAME = "venv";
-export const OCR_SCRIPT_FILE_NAME = "ocr.py";
-export const OCR_REQUIREMENTS_FILE_NAME = "requirements-ocr.txt";
-export const OCR_STAGING_DIR_NAME = "staging";
+export const PYTHON_MIN_VERSION = "3.10";
 
-export const OCR_SUPPORTED_EXTENSIONS = [
+export const GLM_OCR_REPO = "zai-org/GLM-OCR";
+export const GLM_OCR_MODEL_DISPLAY = "GLM-OCR 0.9B";
+export const GLM_OCR_MODEL_ID = "glm-ocr-0.9b";
+
+export const OMNIPARSER_REPO = "microsoft/OmniParser-v2.0";
+export const OMNIPARSER_MODEL_DISPLAY = "OmniParser V2";
+export const OMNIPARSER_MODEL_ID = "omniparser-v2";
+
+export const FLORENCE_CAPTION_REPO = "microsoft/Florence-2-base-ft";
+export const FLORENCE_PROCESSOR_REPO = "microsoft/Florence-2-base";
+
+export const VISION_ENGINES = ["glm", "omni", "auto"] as const;
+export type VisionEngineType = typeof VISION_ENGINES[number];
+
+export const VISION_DOWNLOAD_SIZE_ESTIMATE = "约 3-5 GB（含 torch + 模型权重）";
+
+export const VISION_SUPPORTED_EXTENSIONS = [
   ".png",
   ".jpg",
   ".jpeg",
@@ -21,28 +35,34 @@ export const OCR_SUPPORTED_EXTENSIONS = [
   ".tif",
 ] as const;
 
-export const OCR_PDF_EXTENSION = ".pdf";
-export const OCR_PDF_MAX_PAGES = 100;
-export const OCR_PDF_RENDER_SCALE = 2;
-export const OCR_MAX_SOURCES = 100;
-export const OCR_INLINE_PREVIEW_MAX_CHARS = 2_000;
-export const OCR_SUPPORTED_DOCUMENT_EXTENSIONS = [
-  ".pdf",
-  ".docx",
-  ".pptx",
-  ".md",
-  ".markdown",
-] as const;
-
 export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
-export const IMAGE_MAX_PIXELS = 40_000_000;
 
-// PDF 渲染依赖（与 package.json 的 optionalDependencies 保持一致）
-export const OCR_CANVAS_PACKAGE = "@napi-rs/canvas";
-export const OCR_CANVAS_VERSION = "0.1.100";
+// ---------------------------------------------------------------------------
+// 锁定版本 — 两个引擎共用同一套依赖
+// ---------------------------------------------------------------------------
+export const TORCH_VERSION = "2.5.1";
+export const TORCHVISION_VERSION = "0.20.1";
+export const TRANSFORMERS_VERSION = "5.3.0";
 
-export const PYTHON_MIN_VERSION = "3.10";
+// ---------------------------------------------------------------------------
+// Torch 安装源 — 根据 CPU/GPU 模式和平台选择
+// ---------------------------------------------------------------------------
+export const TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu";
+export const TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121";
+export const TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.1";
 
-export const OCR_LANGUAGES = "简体中文、繁体中文、英文、日文等 50 种";
+export type ComputeMode = "cpu" | "gpu";
+export type GpuVendor = "nvidia" | "amd" | "apple" | "none";
 
-export const OCR_DOWNLOAD_SIZE_ESTIMATE = "约 180 MB";
+export interface PlatformInfo {
+  os: "windows" | "macos" | "linux" | "unknown";
+  arch: "x64" | "arm64" | "ia32" | "unknown";
+  gpuVendor: GpuVendor;
+}
+
+export interface ComputeOption {
+  mode: ComputeMode;
+  gpuVendor: GpuVendor;
+  torchIndex: string;
+  description: string;
+}

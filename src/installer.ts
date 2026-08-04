@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { PACKAGE_NAME } from "./constants.js";
-import { TransxError } from "./errors.js";
+import { VcliError } from "./errors.js";
 import { getBinDirectory } from "./paths.js";
 import { getPackageInfo } from "./package-info.js";
 
@@ -66,7 +66,7 @@ async function ensureWindowsUserPath(binDirectory: string): Promise<void> {
     ? path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
     : "powershell.exe";
   const script = [
-    "$bin = $env:TRANSX_BIN_DIR",
+    "$bin = $env:VCLI_BIN_DIR",
     "$current = [Environment]::GetEnvironmentVariable('Path', 'User')",
     "$parts = @($current -split ';' | Where-Object { $_ })",
     // Windows 文件系统不区分大小写，比较时统一小写，避免等价路径重复加入。
@@ -76,7 +76,7 @@ async function ensureWindowsUserPath(binDirectory: string): Promise<void> {
     "}",
   ].join("\n");
   await execFileAsync(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], {
-    env: { ...process.env, TRANSX_BIN_DIR: binDirectory },
+    env: { ...process.env, VCLI_BIN_DIR: binDirectory },
   });
 }
 
@@ -95,7 +95,7 @@ export function getPosixProfilePath(
 
 async function ensurePosixPath(binDirectory: string): Promise<void> {
   const profile = getPosixProfilePath();
-  const marker = "# transx-cli user bin";
+  const marker = "# vcli user bin";
   let existing = "";
   try {
     existing = await readFile(profile, "utf8");
@@ -130,7 +130,7 @@ export async function installCurrentPackage(force = false): Promise<string> {
       errorOnExist: !force,
     });
     await mkdir(targetOcrResources, { recursive: true, mode: 0o700 });
-    for (const fileName of ["ocr.py", "requirements-ocr.txt"]) {
+    for (const fileName of ["vcli_inference.py", "requirements.txt"]) {
       await cp(
         path.join(packageInfo.root, "resources", "ocr", fileName),
         path.join(targetOcrResources, fileName),
@@ -138,9 +138,9 @@ export async function installCurrentPackage(force = false): Promise<string> {
       );
     }
   } catch (error) {
-    throw new TransxError(
+    throw new VcliError(
       "INSTALL_ERROR",
-      force ? "无法覆盖现有 TransX 安装" : "该版本已安装；如需覆盖请添加 --force",
+      force ? "无法覆盖现有 vcli 安装" : "该版本已安装；如需覆盖请添加 --force",
       5,
       { cause: error },
     );
@@ -162,16 +162,16 @@ export async function installCurrentPackage(force = false): Promise<string> {
   } catch (error) {
     await rm(versionDirectory, { recursive: true, force: true });
     const detail = error instanceof Error ? error.message : String(error);
-    throw new TransxError("INSTALL_ERROR", `依赖安装失败：${detail}`, 5, { cause: error });
+    throw new VcliError("INSTALL_ERROR", `依赖安装失败：${detail}`, 5, { cause: error });
   }
 
   const cliPath = path.join(targetDist, "cli.js");
   if (process.platform === "win32") {
     const launcher = `@echo off\r\nnode "${quoteCmd(cliPath)}" %*\r\n`;
-    await writeFile(path.join(binDirectory, "transx.cmd"), launcher, "utf8");
+    await writeFile(path.join(binDirectory, "vcli.cmd"), launcher, "utf8");
     await ensureWindowsUserPath(binDirectory);
   } else {
-    const launcherPath = path.join(binDirectory, "transx");
+    const launcherPath = path.join(binDirectory, "vcli");
     await writeFile(launcherPath, `#!/bin/sh\nexec node ${quoteShell(cliPath)} "$@"\n`, {
       encoding: "utf8",
       mode: 0o755,
@@ -187,14 +187,14 @@ export async function getLatestVersion(): Promise<string> {
     const { stdout } = await runNpm(["view", PACKAGE_NAME, "version", "--json"]);
     return String(JSON.parse(stdout)).trim();
   } catch (error) {
-    throw new TransxError("UPDATE_ERROR", "无法从 npm Registry 获取最新版本", 5, { cause: error });
+    throw new VcliError("UPDATE_ERROR", "无法从 npm Registry 获取最新版本", 5, { cause: error });
   }
 }
 
 export function compareVersions(left: string, right: string): number {
   const parse = (value: string): { core: number[]; prerelease: string[] } => {
     const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
-    if (!match) throw new TransxError("UPDATE_ERROR", `无法比较版本号：${value}`, 5);
+    if (!match) throw new VcliError("UPDATE_ERROR", `无法比较版本号：${value}`, 5);
     return {
       core: [Number(match[1]), Number(match[2]), Number(match[3])],
       prerelease: match[4]?.split(".") ?? [],
@@ -234,11 +234,11 @@ export async function updateFromRegistry(): Promise<void> {
       "--yes",
       `--package=${PACKAGE_NAME}@latest`,
       "--",
-      "transx",
+      "vcli",
       "install",
       "--force",
     ]);
   } catch (error) {
-    throw new TransxError("UPDATE_ERROR", "更新失败，请检查 npm 和网络状态", 5, { cause: error });
+    throw new VcliError("UPDATE_ERROR", "更新失败，请检查 npm 和网络状态", 5, { cause: error });
   }
 }

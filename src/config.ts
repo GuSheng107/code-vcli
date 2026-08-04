@@ -1,60 +1,50 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import {
-  CONFIG_VERSION,
-  DEFAULT_TARGET_LANGUAGE,
-  DEFAULT_TIMEOUT_MS,
-  DLX_URL_TEMPLATE,
-  ENV_API_KEY,
-} from "./constants.js";
-import { TransxError } from "./errors.js";
+import { CONFIG_VERSION } from "./constants.js";
+import { VcliError } from "./errors.js";
 import { getConfigRoot } from "./paths.js";
 
-interface StoredCredentials {
-  version: number;
-  apiKey: string;
+/**
+ * 轻量配置文件，固定存放在 ~/.vcli/config.json。
+ * 仅用于记录用户选择的 workspace 路径，本身不占用空间。
+ */
+interface LightConfig {
+  workspace: string;
 }
 
-export interface ResolvedConfig {
-  urlTemplate: string;
-  apiKey: string;
-  defaultTarget: string;
-  timeoutMs: number;
+interface StoredState {
+  version: number;
+  initialized: boolean;
+  initialized_at: string | null;
 }
 
 export interface ConfigStatus {
   configDirectory: string;
-  urlTemplate: string;
-  maskedApiKey: string | null;
+  workspace: string;
   initialized: boolean;
-  keySource: "environment" | "local" | null;
+  initializedAt: string | null;
 }
 
-export interface ConfigStatusWithApiKey extends ConfigStatus {
-  apiKey: string | null;
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  return typeof error.code === "string" ? error.code : undefined;
-}
-
-function isStoredCredentials(value: unknown): value is StoredCredentials {
+function isStoredState(value: unknown): value is StoredState {
   return typeof value === "object" && value !== null &&
     "version" in value && typeof value.version === "number" &&
-    "apiKey" in value && typeof value.apiKey === "string";
+    "initialized" in value && typeof value.initialized === "boolean";
 }
 
-async function readCredentials(filePath: string): Promise<StoredCredentials | null> {
+function isLightConfig(value: unknown): value is LightConfig {
+  return typeof value === "object" && value !== null &&
+    "workspace" in value && typeof value.workspace === "string";
+}
+
+async function readJsonFile<T>(filePath: string, guard: (v: unknown) => v is T): Promise<T | null> {
   try {
     const parsed: unknown = JSON.parse(await readFile(filePath, "utf8"));
-    if (!isStoredCredentials(parsed)) throw new Error("invalid credentials schema");
-    return parsed;
+    return guard(parsed) ? parsed : null;
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return null;
-    throw new TransxError("CONFIG_INVALID", `无法读取本地配置：${filePath}`, 3, { cause: error });
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return null;
+    return null;
   }
 }
 
@@ -68,86 +58,90 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
   await rename(temporaryPath, filePath);
 }
 
-export function maskApiKey(apiKey: string): string {
-  if (apiKey.length <= 8) {
-    return "*".repeat(apiKey.length);
+function defaultWorkspace(): string {
+  return getConfigRoot();
+}
+
+/**
+ * 解析并校验用户输入的工作区路径，返回标准化后的绝对路径。
+ * 不要求目录必须存在，但父目录必须可访问。
+ */
+export async function resolveWorkspacePath(input: string): Promise<string> {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new VcliError("INVALID_ARGUMENT", "工作区路径不能为空", 2);
   }
-  return `${apiKey.slice(0, 4)}${"*".repeat(Math.min(8, apiKey.length - 8))}${apiKey.slice(-4)}`;
+  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(process.cwd(), trimmed);
+  // 检查父目录是否存在，避免输入明显错误的路径
+  try {
+    const parentStat = await stat(path.dirname(resolved));
+    if (!parentStat.isDirectory()) {
+      throw new VcliError("INVALID_ARGUMENT", `父目录不是目录：${path.dirname(resolved)}`, 2);
+    }
+  } catch (error) {
+    throw new VcliError(
+      "INVALID_ARGUMENT",
+      `无法访问父目录：${path.dirname(resolved)}`,
+      2,
+      { cause: error },
+    );
+  }
+  return resolved;
 }
 
 export class ConfigStore {
+  /** 固定的轻量配置目录（~/.vcli） */
   readonly directory: string;
-  readonly credentialsPath: string;
+  readonly configPath: string;
 
   constructor(directory = getConfigRoot()) {
     this.directory = directory;
-    this.credentialsPath = path.join(directory, "credentials.json");
+    this.configPath = path.join(directory, "config.json");
   }
 
-  async setApiKey(apiKey: string): Promise<void> {
-    const normalized = apiKey.trim();
-    if (!normalized) {
-      throw new TransxError("CONFIG_INVALID", "API Key 不能为空", 3);
-    }
-    await writeJsonAtomic(this.credentialsPath, {
+  /** 用户选择的工作区根目录（vcli init 时设置，默认 ~/.vcli） */
+  async getWorkspace(): Promise<string> {
+    const config = await readJsonFile(this.configPath, isLightConfig);
+    return config?.workspace ?? defaultWorkspace();
+  }
+
+  async setWorkspace(workspace: string): Promise<void> {
+    const config: LightConfig = { workspace };
+    await writeJsonAtomic(this.configPath, config);
+  }
+
+  async getStatePath(): Promise<string> {
+    const workspace = await this.getWorkspace();
+    return path.join(workspace, "state.json");
+  }
+
+  async setInitialized(): Promise<void> {
+    const state: StoredState = {
       version: CONFIG_VERSION,
-      apiKey: normalized,
-    } satisfies StoredCredentials);
-  }
-
-  async resetKey(): Promise<void> {
-    await rm(this.credentialsPath, { force: true });
-  }
-
-  async resetAll(): Promise<void> {
-    await this.resetKey();
-  }
-
-  async resolve(env: NodeJS.ProcessEnv = process.env): Promise<ResolvedConfig> {
-    const storedCredentials = await readCredentials(this.credentialsPath);
-    const apiKey = env[ENV_API_KEY]?.trim() || storedCredentials?.apiKey;
-
-    if (!apiKey) {
-      throw new TransxError(
-        "CONFIG_NOT_INITIALIZED",
-        "缺少 DLX API Key，请先运行 transx init。获取：https://connect.linux.do/",
-        3,
-      );
-    }
-
-    return {
-      urlTemplate: DLX_URL_TEMPLATE,
-      apiKey,
-      defaultTarget: DEFAULT_TARGET_LANGUAGE,
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      initialized: true,
+      initialized_at: new Date().toISOString(),
     };
+    await writeJsonAtomic(await this.getStatePath(), state);
   }
 
-  async status(env: NodeJS.ProcessEnv = process.env): Promise<ConfigStatus> {
-    const storedCredentials = await readCredentials(this.credentialsPath);
-    const envKey = env[ENV_API_KEY]?.trim();
-    const apiKey = envKey || storedCredentials?.apiKey || null;
+  async reset(): Promise<void> {
+    const state: StoredState = {
+      version: CONFIG_VERSION,
+      initialized: false,
+      initialized_at: null,
+    };
+    await writeJsonAtomic(await this.getStatePath(), state);
+  }
+
+  async status(): Promise<ConfigStatus> {
+    const workspace = await this.getWorkspace();
+    const statePath = await this.getStatePath();
+    const state = await readJsonFile(statePath, isStoredState);
     return {
       configDirectory: this.directory,
-      urlTemplate: DLX_URL_TEMPLATE,
-      maskedApiKey: apiKey ? maskApiKey(apiKey) : null,
-      initialized: Boolean(apiKey),
-      keySource: envKey ? "environment" : storedCredentials?.apiKey ? "local" : null,
+      workspace,
+      initialized: state?.initialized ?? false,
+      initializedAt: state?.initialized_at ?? null,
     };
   }
-
-  async statusWithApiKey(env: NodeJS.ProcessEnv = process.env): Promise<ConfigStatusWithApiKey> {
-    const storedCredentials = await readCredentials(this.credentialsPath);
-    const envKey = env[ENV_API_KEY]?.trim();
-    const apiKey = envKey || storedCredentials?.apiKey || null;
-    return {
-      configDirectory: this.directory,
-      urlTemplate: DLX_URL_TEMPLATE,
-      maskedApiKey: apiKey ? maskApiKey(apiKey) : null,
-      apiKey,
-      initialized: Boolean(apiKey),
-      keySource: envKey ? "environment" : storedCredentials?.apiKey ? "local" : null,
-    };
-  }
-
 }

@@ -1,4 +1,4 @@
-name: 发布 TransX 文档站
+name: 发布 vcli 文档站
 
 on:
   push:

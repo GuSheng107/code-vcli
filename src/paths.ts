@@ -20,7 +20,7 @@ export function getConfigRoot(
   env: PathEnvironment = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  return pathForPlatform(platform).join(getUserHome(env), ".transx");
+  return pathForPlatform(platform).join(getUserHome(env), ".vcli");
 }
 
 export function getInstallRoot(
@@ -31,7 +31,7 @@ export function getInstallRoot(
   if (platform === "win32") {
     const localAppData =
       env.LOCALAPPDATA || platformPath.join(getUserHome(env), "AppData", "Local");
-    return platformPath.join(localAppData, ".transx");
+    return platformPath.join(localAppData, ".vcli");
   }
   return getConfigRoot(env, platform);
 }

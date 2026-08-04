@@ -1,15 +1,15 @@
 {
-  "name": "@gushengcode/transx-cli",
-  "version": "1.0.7",
-  "description": "TransX CLI — DLX 翻译工具",
+  "name": "vcli",
+  "version": "1.0.0",
+  "description": "vcli — VisionCLI 截图转文本工具",
   "type": "module",
   "bin": {
-    "transx": "dist/cli.js"
+    "vcli": "dist/cli.js"
   },
   "files": [
     "dist",
-    "resources/ocr/ocr.py",
-    "resources/ocr/requirements-ocr.txt",
+    "resources/ocr/vcli_inference.py",
+    "resources/ocr/requirements.txt",
     "README.md",
     "scripts/postinstall.mjs"
   ],
@@ -18,35 +18,31 @@
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "build:skill-zip": "node scripts/build-skill-zip.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run check && npm run build && node --test test/*.test.mjs",
     "postinstall": "node scripts/postinstall.mjs",
     "prepack": "npm run build"
   },
   "keywords": [
-    "dlx",
-    "translation",
+    "vision",
+    "ocr",
+    "screenshot",
     "cli",
-    "ai-agent"
+    "ai-agent",
+    "glm-ocr",
+    "omniparser"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GuSheng107/transx-cli.git"
+    "url": "git+https://github.com/GuSheng107/vcli.git"
   },
   "bugs": {
-    "url": "https://github.com/GuSheng107/transx-cli/issues"
+    "url": "https://github.com/GuSheng107/vcli/issues"
   },
-  "homepage": "https://gusheng107.github.io/transx-cli/",
-  "license": "MIT",
+  "homepage": "https://github.com/GuSheng107/vcli",
+  "license": "AGPL-3.0-or-later",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
-  },
-  "dependencies": {
-    "@napi-rs/canvas": "0.1.100",
-    "fflate": "0.8.3",
-    "unpdf": "1.7.0"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

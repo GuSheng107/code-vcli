@@ -1,46 +1,38 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  OCR_ENGINE,
-  OCR_FEATURE_DIR_NAME,
-  OCR_FEATURE_VERSION,
-  OCR_MODEL_DISPLAY,
-  OCR_MODEL_ID,
-  OCR_RUNTIME_VERSION,
-  OCR_STATE_FILE_NAME,
+  VISION_FEATURE_VERSION,
+  VISION_STATE_FILE_NAME,
 } from "./constants.js";
-import type { OcrFeatureState, OcrFeatureStatus } from "./types.js";
+import type { VisionFeatureState, VisionFeatureStatus } from "./types.js";
 
-function isOcrFeatureState(value: unknown): value is OcrFeatureState {
+function isVisionFeatureState(value: unknown): value is VisionFeatureState {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return typeof record.status === "string" &&
     typeof record.feature_version === "string" &&
-    typeof record.engine === "string" &&
-    typeof record.model === "string" &&
-    typeof record.model_display === "string" &&
-    typeof record.runtime_version === "string" &&
+    typeof record.python_version === "string" &&
     typeof record.platform === "string" &&
     typeof record.arch === "string" &&
     typeof record.installed_at === "string" &&
     typeof record.verified === "boolean";
 }
 
-export class OcrFeatureStateStore {
-  readonly featureDirectory: string;
+export class VisionStateStore {
+  readonly directory: string;
   readonly statePath: string;
 
   constructor(configRoot: string) {
-    this.featureDirectory = path.join(configRoot, OCR_FEATURE_DIR_NAME);
-    this.statePath = path.join(this.featureDirectory, OCR_STATE_FILE_NAME);
+    this.directory = configRoot;
+    this.statePath = path.join(configRoot, VISION_STATE_FILE_NAME);
   }
 
-  async read(): Promise<OcrFeatureState | null> {
+  async read(): Promise<VisionFeatureState | null> {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.statePath, "utf8"));
-      return isOcrFeatureState(parsed) ? parsed : null;
+      return isVisionFeatureState(parsed) ? parsed : null;
     } catch {
       return null;
     }
@@ -51,19 +43,16 @@ export class OcrFeatureStateStore {
     return state?.status === "ready" && state.verified;
   }
 
-  async getStatus(): Promise<OcrFeatureStatus> {
+  async getStatus(): Promise<VisionFeatureStatus> {
     const state = await this.read();
-    return state?.status ?? "disabled";
+    return state?.status ?? "none";
   }
 
-  async writeReady(): Promise<void> {
-    const state: OcrFeatureState = {
+  async writeReady(pythonVersion: string): Promise<void> {
+    const state: VisionFeatureState = {
       status: "ready",
-      feature_version: OCR_FEATURE_VERSION,
-      engine: OCR_ENGINE,
-      model: OCR_MODEL_ID,
-      model_display: OCR_MODEL_DISPLAY,
-      runtime_version: OCR_RUNTIME_VERSION,
+      feature_version: VISION_FEATURE_VERSION,
+      python_version: pythonVersion,
       platform: process.platform,
       arch: process.arch,
       installed_at: new Date().toISOString(),
@@ -72,29 +61,27 @@ export class OcrFeatureStateStore {
     await this.writeAtomic(state);
   }
 
-  async writeStatus(status: OcrFeatureStatus): Promise<void> {
+  async writeStatus(status: VisionFeatureStatus, pythonVersion = ""): Promise<void> {
     const existing = await this.read();
-    const state: OcrFeatureState = existing ?? {
+    const state: VisionFeatureState = existing ?? {
       status,
-      feature_version: OCR_FEATURE_VERSION,
-      engine: OCR_ENGINE,
-      model: OCR_MODEL_ID,
-      model_display: OCR_MODEL_DISPLAY,
-      runtime_version: OCR_RUNTIME_VERSION,
+      feature_version: VISION_FEATURE_VERSION,
+      python_version: pythonVersion,
       platform: process.platform,
       arch: process.arch,
       installed_at: new Date().toISOString(),
       verified: false,
     };
-    await this.writeAtomic({ ...state, status });
+    await this.writeAtomic({ ...state, status, python_version: pythonVersion || state.python_version });
   }
 
   async clear(): Promise<void> {
-    await rm(this.featureDirectory, { recursive: true, force: true });
+    const { rm } = await import("node:fs/promises");
+    await rm(this.statePath, { force: true });
   }
 
-  private async writeAtomic(state: OcrFeatureState): Promise<void> {
-    await mkdir(this.featureDirectory, { recursive: true, mode: 0o700 });
+  private async writeAtomic(state: VisionFeatureState): Promise<void> {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const temporaryPath = `${this.statePath}.${randomUUID()}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf8",

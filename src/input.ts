@@ -1,7 +1,7 @@
 import { stdin, stderr } from "node:process";
 import { createInterface } from "node:readline/promises";
 
-import { TransxError } from "./errors.js";
+import { VcliError } from "./errors.js";
 
 export async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -14,7 +14,7 @@ export async function readStdin(): Promise<string> {
 export async function promptText(prompt: string): Promise<string> {
   if (stdin.isTTY && typeof stdin.setRawMode === "function") {
     const value = await promptRawInput(prompt, false);
-    if (value === null) throw new TransxError("CANCELLED", "操作已取消", 130);
+    if (value === null) throw new VcliError("CANCELLED", "操作已取消", 130);
     return value;
   }
 
@@ -36,17 +36,13 @@ export function parseYesNo(value: string): boolean | null {
 export async function promptYesNo(prompt: string): Promise<boolean> {
   if (!stdin.isTTY) {
     const answer = parseYesNo(await promptText(prompt));
-    if (answer === null) throw new TransxError("INVALID_ARGUMENT", "请输入 y 或 n", 2);
+    if (answer === null) throw new VcliError("INVALID_ARGUMENT", "请输入 y 或 n", 2);
     return answer;
   }
   while (true) {
     const answer = parseYesNo(await promptText(prompt));
     if (answer !== null) return answer;
   }
-}
-
-export async function promptTranslationContinue(): Promise<boolean> {
-  return (await promptEnterOrEscape("\nEnter 继续翻译 · Esc 返回主菜单")) === "enter";
 }
 
 export async function promptEnterOrEscape(
@@ -66,7 +62,7 @@ export async function promptEnterOrEscape(
     const onData = (input: string): void => {
       if (input.includes("\u0003")) {
         cleanup();
-        reject(new TransxError("CANCELLED", "操作已取消", 130));
+        reject(new VcliError("CANCELLED", "操作已取消", 130));
       } else if (input.includes("\u001b")) {
         cleanup();
         resolve("escape");
@@ -77,16 +73,6 @@ export async function promptEnterOrEscape(
     };
     stdin.on("data", onData);
   });
-}
-
-export async function promptSecret(prompt: string): Promise<string> {
-  if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
-    throw new TransxError("INVALID_ARGUMENT", "非交互环境请使用 --stdin 提供 API Key", 2);
-  }
-
-  const value = await promptRawInput(prompt, true);
-  if (value === null) throw new TransxError("CANCELLED", "操作已取消", 130);
-  return value;
 }
 
 async function promptRawInput(prompt: string, secret: boolean): Promise<string | null> {
@@ -107,7 +93,7 @@ async function promptRawInput(prompt: string, secret: boolean): Promise<string |
       for (const character of Array.from(input)) {
         if (character === "\u0003") {
           cleanup();
-          reject(new TransxError("CANCELLED", "操作已取消", 130));
+          reject(new VcliError("CANCELLED", "操作已取消", 130));
           return;
         }
         if (character === "\u001b") {
