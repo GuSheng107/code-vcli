@@ -270,11 +270,10 @@ def download_all_models() -> None:
 def load_glm_ocr() -> tuple[Any, Any]:
     """加载 GLM-OCR 模型与 processor。
 
-    GLM-OCR 的架构是 GlmOcrForConditionalGeneration（视觉-语言条件生成模型），
-    不是 CausalLM，因此不能用 AutoModelForCausalLM 加载。
-    使用 AutoModel 加载，并通过 architectures 字段自动映射到正确的类。
+    GLM-OCR 属于 ImageTextToText 架构，官方推荐用 AutoModelForImageTextToText
+    加载；AutoModel 会落到 GlmOcrModel，缺少 generate 方法。
     """
-    from transformers import AutoModel, AutoProcessor  # type: ignore[import-untyped]
+    from transformers import AutoModelForImageTextToText, AutoProcessor  # type: ignore[import-untyped]
     import torch  # type: ignore[import-untyped]
 
     device = get_device()
@@ -284,7 +283,7 @@ def load_glm_ocr() -> tuple[Any, Any]:
         kwargs["device_map"] = "auto"
 
     log(f"加载 GLM-OCR（device={device}, dtype={dtype}）…")
-    model = AutoModel.from_pretrained(str(GLM_OCR_DIR), **kwargs)
+    model = AutoModelForImageTextToText.from_pretrained(str(GLM_OCR_DIR), **kwargs)
     if device != "cuda":
         model = model.to(device)
     model.eval()
@@ -295,24 +294,30 @@ def load_glm_ocr() -> tuple[Any, Any]:
 def run_glm_ocr(model: Any, processor: Any, image_path: str) -> tuple[str, list[dict[str, Any]]]:
     """使用 GLM-OCR 执行推理，返回 (全文, items)。"""
     import torch  # type: ignore[import-untyped]
-    from PIL import Image  # type: ignore[import-untyped]
 
-    image = Image.open(image_path).convert("RGB")
+    # GLM-OCR 官方格式：content 使用 url 字段传入图片路径
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image"},
-                {"type": "text", "text": OCR_PROMPT},
+                {"type": "image", "url": image_path},
+                {"type": "text", "text": "Text Recognition:"},
             ],
         }
     ]
 
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=text, images=image, return_tensors="pt")
-    inputs = _move_inputs(inputs, model.device)
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(model.device)
 
-    with torch.no_grad():
+    # GLM-OCR 要求移除 token_type_ids
+    inputs.pop("token_type_ids", None)
+
+    with torch.inference_mode():
         output_ids = model.generate(
             **inputs,
             max_new_tokens=4096,
@@ -320,11 +325,8 @@ def run_glm_ocr(model: Any, processor: Any, image_path: str) -> tuple[str, list[
         )
 
     input_len = inputs["input_ids"].shape[1]
-    generated = processor.batch_decode(
-        output_ids[:, input_len:],
-        skip_special_tokens=True,
-    )
-    recognized = generated[0].strip() if generated else ""
+    generated_ids = output_ids[0][input_len:]
+    recognized = processor.decode(generated_ids, skip_special_tokens=True).strip()
 
     if recognized:
         return recognized, [{"text": recognized, "confidence": 1.0}]
