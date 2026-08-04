@@ -1,0 +1,10 @@
+{
+  "name": "transx-translate-skill-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "fflate": "0.8.3",
+    "unpdf": "1.7.0"
+  }
+}

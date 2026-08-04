@@ -1,0 +1,7 @@
+{
+  "name": "transx-ocr-node",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TransX OCR Node bridge — calls Python RapidOCR via subprocess"
+}

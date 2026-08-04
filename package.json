@@ -1,0 +1,56 @@
+{
+  "name": "@gushengcode/transx-cli",
+  "version": "1.0.7",
+  "description": "TransX CLI — DLX 翻译工具",
+  "type": "module",
+  "bin": {
+    "transx": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "resources/ocr/ocr.py",
+    "resources/ocr/requirements-ocr.txt",
+    "README.md",
+    "scripts/postinstall.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "build:skill-zip": "node scripts/build-skill-zip.mjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run check && npm run build && node --test test/*.test.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "dlx",
+    "translation",
+    "cli",
+    "ai-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GuSheng107/transx-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GuSheng107/transx-cli/issues"
+  },
+  "homepage": "https://gusheng107.github.io/transx-cli/",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "fflate": "0.8.3",
+    "unpdf": "1.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "tsx": "4.23.5",
+    "typescript": "5.9.3"
+  }
+}

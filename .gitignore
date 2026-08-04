@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+.DS_Store
+npm-debug.log*
+.tmp-e2e/
+/pip/
+/test-files/*
+!/test-files/sample.pdf
+npm_recovery_codes.txt
+.npmrc
+__pycache__/
+*.pyc
