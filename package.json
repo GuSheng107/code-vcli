@@ -34,12 +34,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GuSheng107/code-vcli.git"
+    "url": "git+https://git.dianplus.cn/shanfan/code-vcli.git"
   },
   "bugs": {
-    "url": "https://github.com/GuSheng107/code-vcli/issues"
+    "url": "https://git.dianplus.cn/shanfan/code-vcli/-/issues"
   },
-  "homepage": "https://github.com/GuSheng107/code-vcli",
+  "homepage": "https://git.dianplus.cn/shanfan/code-vcli",
   "license": "AGPL-3.0-or-later",
   "publishConfig": {
     "access": "public",
