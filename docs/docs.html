@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f0edff" />
+    <meta name="description" content="code-vcli 工具文档：为 AI 编码模型提供 web 开发视觉能力的 CLI 工具。逐条说明每个指令的语法、专属参数、示例与返回格式。" />
+    <title>工具文档 — code-vcli</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./styles.css?v=20260805-3" />
+    <script src="./app.js?v=20260805-3" defer></script>
+  </head>
+  <body class="docs-page">
+    <header class="topbar">
+      <a class="logo" href="./index.html" aria-label="code-vcli 首页">
+        <span class="logo-icon">CVC</span>
+        <span class="logo-text">code-vcli</span>
+      </a>
+      <nav class="topnav" aria-label="主导航">
+        <a href="./index.html">CLI</a>
+        <a href="./skills.html">Skills</a>
+        <a class="active" href="./docs.html" aria-current="page">工具文档</a>
+        <a class="topnav-github" href="https://github.com/GuSheng107/code-vcli" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main class="docs-layout">
+      <aside class="docs-nav" aria-label="指令目录">
+        <p class="docs-nav-title">指令文档</p>
+        <p class="docs-nav-group">入门</p>
+        <a href="#cmd-start" class="active"><span>01</span><span class="nav-label"><strong>vcli</strong><small>打开交互界面</small></span></a>
+        <a href="#cmd-help"><span>02</span><span class="nav-label"><strong>help</strong><small>查看完整帮助</small></span></a>
+        <p class="docs-nav-group">识别与配置</p>
+        <a href="#cmd-init"><span>03</span><span class="nav-label"><strong>init</strong><small>初始化视觉模型环境</small></span></a>
+        <a href="#cmd-run"><span>04</span><span class="nav-label"><strong>run</strong><small>识别图片</small></span></a>
+        <a href="#cmd-reset"><span>05</span><span class="nav-label"><strong>reset</strong><small>重置环境</small></span></a>
+        <a href="#cmd-info"><span>06</span><span class="nav-label"><strong>info</strong><small>查看环境信息</small></span></a>
+        <p class="docs-nav-group">安装与维护</p>
+        <a href="#cmd-install"><span>07</span><span class="nav-label"><strong>install</strong><small>安装到用户目录</small></span></a>
+        <a href="#cmd-version"><span>08</span><span class="nav-label"><strong>version</strong><small>查看和检查版本</small></span></a>
+        <a href="#cmd-update"><span>09</span><span class="nav-label"><strong>update</strong><small>更新到最新版</small></span></a>
+        <p class="docs-nav-group">输出</p>
+        <a href="#cmd-output"><span>10</span><span class="nav-label"><strong>JSON 与错误码</strong><small>输出格式</small></span></a>
+      </aside>
+
+      <div class="docs-content">
+        <article class="doc-section command-doc" id="cmd-start">
+          <div class="doc-index">01</div>
+          <span class="kicker">INTERACTIVE</span>
+          <h1><code>vcli</code></h1>
+          <p class="doc-lead">打开可交互 CLI，支持识别图片、初始化环境、查看信息。非交互环境输出帮助。</p>
+          <div class="cmd-block command-syntax"><code id="code-start">vcli</code><button type="button" class="copy-btn" data-copy="code-start" aria-label="复制 vcli 命令">复制</button></div>
+          <div class="terminal-preview-grid">
+            <figure>
+              <div class="preview-term"><span class="pt-logo">██╗   ██╗ ██████╗██╗     ██╗
+██║   ██║██╔════╝██║     ██║
+██║   ██║██║     ██║     ██║
+╚██╗ ██╔╝██║     ██║     ██║
+ ╚████╔╝ ╚██████╗███████╗██║
+  ╚═══╝   ╚═════╝╚══════╝╚═╝</span>
+<span class="pt-bright">code-vcli v1.0.0</span>  <span class="pt-muted">未初始化 · 请先运行 init</span>
+
+<span class="pt-border">┌──────────────────────────────┐
+│</span>  欢迎使用 code-vcli          <span class="pt-border">│
+└──────────────────────────────┘</span>
+<span class="pt-muted">为 AI 模型提供 Web 开发视觉能力</span>
+
+<span class="pt-accent">❯</span> 1. 初始化          <span class="pt-muted">安装视觉模型环境</span>
+  2. 查看环境          <span class="pt-muted">显示 code-vcli 与系统环境信息</span>
+  3. 检查版本更新      <span class="pt-muted">比较 npm Registry 最新版本</span>
+  4. 查看帮助          <span class="pt-muted">显示所有命令与参数</span>
+  5. 退出              <span class="pt-muted">结束 code-vcli</span></div>
+              <figcaption>未初始化</figcaption>
+            </figure>
+            <figure>
+              <div class="preview-term"><span class="pt-logo">██╗   ██╗ ██████╗██╗     ██╗
+██║   ██║██╔════╝██║     ██║
+██║   ██║██║     ██║     ██║
+╚██╗ ██╔╝██║     ██║     ██║
+ ╚████╔╝ ╚██████╗███████╗██║
+  ╚═══╝   ╚═════╝╚══════╝╚═╝</span>
+<span class="pt-bright">code-vcli v1.0.0</span>  <span class="pt-accent">模型就绪</span>
+
+<span class="pt-border">┌──────────────────────────────┐
+│</span>  欢迎使用 code-vcli          <span class="pt-border">│
+└──────────────────────────────┘</span>
+<span class="pt-muted">为 AI 模型提供 Web 开发视觉能力</span>
+
+<span class="pt-accent">❯</span> 1. 识别图片        <span class="pt-muted">PP-OCRv6 / + YOLO Web 模式</span>
+  2. 重新初始化        <span class="pt-muted">重装视觉模型环境</span>
+  3. 查看环境          <span class="pt-muted">显示 code-vcli 与系统环境信息</span>
+  4. 检查版本更新      <span class="pt-muted">比较 npm Registry 最新版本</span>
+  5. 查看帮助          <span class="pt-muted">显示所有命令与参数</span>
+  6. 退出              <span class="pt-muted">结束 code-vcli</span></div>
+              <figcaption>已初始化</figcaption>
+            </figure>
+          </div>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-help">
+          <div class="doc-index">02</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli help</code></h2>
+          <p class="doc-lead">显示命令、参数和示例。</p>
+          <div class="cmd-block command-syntax"><code id="code-help">vcli help</code><button type="button" class="copy-btn" data-copy="code-help" aria-label="复制 help 命令">复制</button></div>
+          <div class="no-options"><strong>参数</strong><span>无。也可以使用 <code>vcli --help</code> 或 <code>vcli -h</code>。</span></div>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-init">
+          <div class="doc-index">03</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli init</code></h2>
+          <p class="doc-lead">初始化视觉模型环境：创建 venv、选计算模式、下载模型权重（约 1-2 GB）。首次使用前必须运行。</p>
+          <div class="cmd-block command-syntax"><code id="code-init">vcli init [--yes] [--workspace &lt;path&gt;] [--reset-workspace]</code><button type="button" class="copy-btn" data-copy="code-init" aria-label="复制 init 命令">复制</button></div>
+          <h3 class="sub-h">专属参数</h3>
+          <div class="opt-table">
+            <div class="opt-row opt-head"><span>参数</span><span>作用</span><span>默认值</span></div>
+            <div class="opt-row"><code>--yes</code><span>跳过所有交互确认，使用默认值</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>--workspace &lt;path&gt;</code><span>指定工作区路径（存放 venv + 模型）</span><span class="dim">~/.code-vcli/</span></div>
+            <div class="opt-row"><code>--reset-workspace</code><span>重新选择工作区路径</span><span class="dim">—</span></div>
+          </div>
+          <h3 class="sub-h">示例</h3>
+          <div class="cmd-block"><code id="example-init">vcli init</code><button type="button" class="copy-btn" data-copy="example-init" aria-label="复制 init 示例">复制</button></div>
+          <p class="doc-note">跳过交互：<code>vcli init --yes</code></p>
+          <p class="doc-note">自定义工作区：<code>vcli init --yes --workspace "E:\code-vcli-data"</code></p>
+          <p class="doc-note">需要 Python 3.10+。模型缓存位置：<code>~/.code-vcli/models/</code>。</p>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-run">
+          <div class="doc-index">04</div>
+          <span class="kicker">RECOGNITION</span>
+          <h2><code>vcli run</code></h2>
+          <p class="doc-lead">对图片执行视觉识别。Agent 调用使用 <code>--json</code>。</p>
+          <div class="cmd-block command-syntax"><code id="code-run">vcli run &lt;image&gt; [options]</code><button type="button" class="copy-btn" data-copy="code-run" aria-label="复制 run 命令">复制</button></div>
+          <h3 class="sub-h">专属参数</h3>
+          <div class="opt-table">
+            <div class="opt-row opt-head"><span>参数</span><span>作用</span><span>默认值</span></div>
+            <div class="opt-row"><code>&lt;image&gt;</code><span>图片文件路径（必填）。支持 png/jpg/jpeg/webp/bmp/tiff/tif，上限 20 MB</span><span class="dim">—</span></div>
+            <div class="opt-row"><code>--ocr &lt;ppocrv6&gt;</code><span>OCR 引擎</span><span class="dim">ppocrv6</span></div>
+            <div class="opt-row"><code>-w, --web</code><span>启用 YOLO UI 元素检测（网页/UI 场景）</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>--json</code><span>输出适合 AI 读取的 JSON</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>--timeout &lt;seconds&gt;</code><span>本次推理超时（秒），必须为正数</span><span class="dim">—</span></div>
+            <div class="opt-row"><code>-h, --help</code><span>显示 CLI 帮助</span><span class="dim">—</span></div>
+          </div>
+          <h3 class="sub-h">示例</h3>
+          <div class="cmd-block"><code id="example-run-1">vcli run ./screenshot.png</code><button type="button" class="copy-btn" data-copy="example-run-1" aria-label="复制普通模式示例">复制</button></div>
+          <p class="doc-note">JSON 输出：<code>vcli run ./screenshot.png --json</code></p>
+          <p class="doc-note">Web 模式：<code>vcli run ./webpage.png --web</code></p>
+          <p class="doc-note">Web 模式 + JSON：<code>vcli run ./webpage.png --web --json</code></p>
+          <h3 class="sub-h">模式说明</h3>
+          <div class="mode-summary">
+            <div><strong>普通模式</strong><span>整图 OCR，速度快、带坐标。PP-OCRv6（RapidOCR + OpenVINO），支持中英日等 50 种语言</span></div>
+            <div><strong>Web 模式 <code>-w</code></strong><span>叠加 OmniParser V2 YOLO 检测 UI 元素位置，通过 IoU、中心点距离、面积比把文字归到对应元素上，按位置排序输出</span></div>
+          </div>
+          <p class="doc-note">Web 模式仅在网页/UI 截图场景使用，普通文档截图无需启用 <code>--web</code>。</p>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-reset">
+          <div class="doc-index">05</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli reset</code></h2>
+          <p class="doc-lead">重置环境：删除工作区数据（venv + 模型权重），需重新运行 <code>vcli init</code>。</p>
+          <div class="cmd-block command-syntax"><code id="code-reset">vcli reset [--yes]</code><button type="button" class="copy-btn" data-copy="code-reset" aria-label="复制 reset 命令">复制</button></div>
+          <h3 class="sub-h">专属参数</h3>
+          <div class="opt-table compact-table">
+            <div class="opt-row opt-head"><span>参数</span><span>作用</span></div>
+            <div class="opt-row"><code>--yes</code><span>跳过确认，直接删除工作区数据</span></div>
+          </div>
+          <h3 class="sub-h">示例</h3>
+          <div class="cmd-block"><code id="example-reset">vcli reset</code><button type="button" class="copy-btn" data-copy="example-reset" aria-label="复制 reset 示例">复制</button></div>
+          <p class="doc-note">静默删除：<code>vcli reset --yes</code></p>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-info">
+          <div class="doc-index">06</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli info</code></h2>
+          <p class="doc-lead">显示 code-vcli 版本、配置目录、工作区、系统环境、Python 和视觉模型状态。</p>
+          <div class="cmd-block command-syntax"><code id="code-info">vcli info</code><button type="button" class="copy-btn" data-copy="code-info" aria-label="复制 info 命令">复制</button></div>
+          <div class="no-options"><strong>参数</strong><span>无。输出包含版本、配置目录、工作区、初始化状态、操作系统、Node.js、Python、视觉模型状态和 OCR 引擎信息。</span></div>
+          <h3 class="sub-h">输出内容</h3>
+          <div class="mode-summary">
+            <div><strong>版本</strong><span>当前 code-vcli 版本号</span></div>
+            <div><strong>配置目录</strong><span>轻量 config.json 路径</span></div>
+            <div><strong>工作区</strong><span>venv + 模型权重路径</span></div>
+            <div><strong>系统环境</strong><span>操作系统、Node.js、主机、CPU、内存</span></div>
+            <div><strong>Python 环境</strong><span>检测到的 Python 版本与路径</span></div>
+            <div><strong>视觉模型</strong><span>状态、已验证、安装时间、模型与 venv 目录</span></div>
+          </div>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-install">
+          <div class="doc-index">07</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli install</code></h2>
+          <p class="doc-lead">把当前包安装到用户目录并配置 PATH，支持 Windows、macOS 与 Linux。</p>
+          <div class="cmd-block command-syntax"><code id="code-install">vcli install [--force]</code><button type="button" class="copy-btn" data-copy="code-install" aria-label="复制 install 命令">复制</button></div>
+          <h3 class="sub-h">专属参数</h3>
+          <div class="opt-table compact-table">
+            <div class="opt-row opt-head"><span>参数</span><span>作用</span></div>
+            <div class="opt-row"><code>--force</code><span>覆盖用户目录中已存在的同版本安装</span></div>
+          </div>
+          <h3 class="sub-h">首次安装</h3>
+          <div class="cmd-block"><code id="example-install">npm i code-vcli</code><button type="button" class="copy-btn" data-copy="example-install" aria-label="复制首次安装命令">复制</button></div>
+          <p class="doc-note">要求 Node.js 22+ 和 Python 3.10+。安装完成后重新打开终端。</p>
+          <p class="doc-note">查看当前生效路径：Windows 使用 <code>where vcli</code>，macOS/Linux 使用 <code>which vcli</code>。</p>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-version">
+          <div class="doc-index">08</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli version</code></h2>
+          <p class="doc-lead">显示当前版本；<code>--check</code> 检查最新版。</p>
+          <div class="cmd-block command-syntax"><code id="code-version">vcli version [--check]</code><button type="button" class="copy-btn" data-copy="code-version" aria-label="复制 version 命令">复制</button></div>
+          <h3 class="sub-h">专属参数</h3>
+          <div class="opt-table compact-table">
+            <div class="opt-row opt-head"><span>参数</span><span>作用</span></div>
+            <div class="opt-row"><code>--check</code><span>查询 npm Registry 并比较最新版本</span></div>
+          </div>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-update">
+          <div class="doc-index">09</div>
+          <span class="kicker">COMMAND</span>
+          <h2><code>vcli update</code></h2>
+          <p class="doc-lead">从 npm Registry 更新 code-vcli 到最新版。</p>
+          <div class="cmd-block command-syntax"><code id="code-update">vcli update</code><button type="button" class="copy-btn" data-copy="code-update" aria-label="复制 update 命令">复制</button></div>
+          <div class="no-options"><strong>参数</strong><span>无。执行前可先运行 <code>vcli version --check</code> 查看是否有新版本。</span></div>
+        </article>
+
+        <article class="doc-section command-doc" id="cmd-output">
+          <div class="doc-index">10</div>
+          <span class="kicker">OUTPUT</span>
+          <h2>JSON 与错误码</h2>
+          <p class="doc-lead"><code>run --json</code>：成功写入 stdout，失败写入 stderr。</p>
+          <div class="output-grid">
+            <div class="output-card success-card">
+              <div class="output-header"><span>SUCCESS</span><b>EXIT 0</b></div>
+              <pre><code>{
+  "ok": true,
+  "text": "第一行\n第二行",
+  "items": [
+    {
+      "text": "登录",
+      "confidence": 0.98,
+      "box": [[10,20],[60,20],[60,40],[10,40]],
+      "bbox": [10,20,60,40],
+      "source": "yolo+ocr",
+      "type": "ui_text"
+    }
+  ],
+  "engine": "web",
+  "ocr": "ppocrv6",
+  "model": "OmniParser V2 YOLO + PP-OCRv6"
+}</code></pre>
+            </div>
+            <div class="output-card error-card">
+              <div class="output-header"><span>ERROR</span><b>EXIT ≠ 0</b></div>
+              <pre><code>{
+  "ok": false,
+  "error": {
+    "code": "MODEL_TEXT_EMPTY",
+    "message": "未识别到文字"
+  }
+}</code></pre>
+            </div>
+          </div>
+          <h3 class="sub-h">JSON 顶层字段</h3>
+          <div class="opt-table">
+            <div class="opt-row opt-head"><span>字段</span><span>类型</span><span>说明</span></div>
+            <div class="opt-row"><code>ok</code><span>boolean</span><span>是否成功</span></div>
+            <div class="opt-row"><code>text</code><span>string</span><span>全文识别结果，各项用 \n 连接</span></div>
+            <div class="opt-row"><code>items</code><span>array</span><span>识别项数组</span></div>
+            <div class="opt-row"><code>engine</code><span>string</span><span>web 或 ppocrv6</span></div>
+            <div class="opt-row"><code>ocr</code><span>string</span><span>OCR 引擎，当前为 ppocrv6</span></div>
+            <div class="opt-row"><code>model</code><span>string</span><span>实际使用的模型显示名</span></div>
+          </div>
+          <h3 class="sub-h">items[] 字段</h3>
+          <div class="opt-table">
+            <div class="opt-row opt-head"><span>字段</span><span>类型</span><span>说明</span></div>
+            <div class="opt-row"><code>text</code><span>string</span><span>该项文字；Web 模式下为合并后的文字</span></div>
+            <div class="opt-row"><code>confidence</code><span>number</span><span>置信度（0~1）</span></div>
+            <div class="opt-row"><code>box</code><span>array</span><span>四边形 4 顶点坐标 [[x1,y1]...]</span></div>
+            <div class="opt-row"><code>bbox</code><span>array</span><span>轴对齐矩形 [x1,y1,x2,y2]</span></div>
+            <div class="opt-row"><code>source</code><span>string</span><span>ppocr / yolo / yolo+ocr</span></div>
+            <div class="opt-row"><code>type</code><span>string</span><span>仅 Web 模式：ui_element / ui_text</span></div>
+          </div>
+          <h3 class="sub-h">错误码</h3>
+          <div class="opt-table">
+            <div class="opt-row opt-head"><span>code</span><span>含义</span><span>exit</span></div>
+            <div class="opt-row"><code>INVALID_ARGUMENT</code><span>参数错误</span><span class="dim">2</span></div>
+            <div class="opt-row"><code>MODEL_RECOGNITION_FAILED</code><span>推理失败 / 超时 / 输出解析失败</span><span class="dim">4</span></div>
+            <div class="opt-row"><code>IMAGE_READ_ERROR</code><span>无法访问图片 / 路径不存在</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>IMAGE_FORMAT_UNSUPPORTED</code><span>不支持的图片格式</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>IMAGE_TOO_LARGE</code><span>图片超过 20 MB</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_NOT_INSTALLED</code><span>视觉模型未安装</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_TEXT_EMPTY</code><span>图片中未识别到文字</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_RUNTIME_MISSING</code><span>Python 运行时或推理脚本丢失</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_INITIALIZATION_FAILED</code><span>模型初始化/下载失败</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_INSTALL_DECLINED</code><span>用户取消模型安装</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_DOWNLOAD_FAILED</code><span>模型下载失败</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>MODEL_INSTALL_FAILED</code><span>模型安装失败</span><span class="dim">6</span></div>
+            <div class="opt-row"><code>CONFIG_NOT_INITIALIZED</code><span>配置未初始化</span><span class="dim">3</span></div>
+            <div class="opt-row"><code>CONFIG_INVALID</code><span>配置无效</span><span class="dim">3</span></div>
+            <div class="opt-row"><code>INSTALL_ERROR</code><span>安装失败</span><span class="dim">5</span></div>
+            <div class="opt-row"><code>UPDATE_ERROR</code><span>更新失败</span><span class="dim">5</span></div>
+            <div class="opt-row"><code>CANCELLED</code><span>用户取消</span><span class="dim">130</span></div>
+          </div>
+        </article>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <a href="https://github.com/GuSheng107/code-vcli" target="_blank" rel="noreferrer">GitHub ↗</a>
+      <p>code-vcli · 为 AI 模型提供 Web 开发视觉能力</p>
+    </footer>
+    <div class="toast" role="status" aria-live="polite">已复制</div>
+  </body>
+</html>

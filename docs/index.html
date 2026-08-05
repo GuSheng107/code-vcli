@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f0edff" />
+    <meta name="description" content="code-vcli — 为 AI 模型提供 web 开发视觉能力的 CLI 工具。本地截图转文本，推理不上传。" />
+    <meta property="og:title" content="code-vcli — AI 模型的 Web 开发视觉能力" />
+    <meta property="og:description" content="把截图/网页截图/文档图片转成结构化文本和 JSON，让没有视觉能力的 AI 模型也能看懂 UI 布局完成 web 开发。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://gusheng107.github.io/code-vcli/" />
+    <title>code-vcli — AI 模型的 Web 开发视觉能力</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./styles.css?v=20260805-3" />
+    <script src="./app.js?v=20260805-3" defer></script>
+  </head>
+  <body class="home-page">
+    <header class="topbar">
+      <a class="logo" href="./index.html" aria-label="code-vcli 首页">
+        <span class="logo-icon">CVC</span>
+        <span class="logo-text">code-vcli</span>
+      </a>
+      <nav class="topnav" aria-label="主导航">
+        <a class="active" href="./index.html" aria-current="page">CLI</a>
+        <a href="./skills.html">Skills</a>
+        <a href="./docs.html">工具文档</a>
+        <a class="topnav-github" href="https://github.com/GuSheng107/code-vcli" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main class="home-main">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="glow glow-left" aria-hidden="true"></div>
+      <div class="glow glow-right" aria-hidden="true"></div>
+
+      <div class="hero-copy">
+        <h1>code-vcli <em>CLI</em> 服务</h1>
+        <p class="subtitle">为 AI 编码模型提供 Web 开发视觉能力。</p>
+      </div>
+
+      <div class="hero-stage">
+        <div class="laptop" aria-label="终端预览">
+          <div class="laptop-frame">
+            <div class="laptop-screen">
+              <div class="term-bar">
+                <div class="term-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <span>code-vcli v1.0.0</span>
+              </div>
+              <div class="term-body">
+                <pre class="term-session" aria-label="code-vcli 未初始化状态预览"><span class="term-logo">██╗   ██╗ ██████╗██╗     ██╗
+██║   ██║██╔════╝██║     ██║
+██║   ██║██║     ██║     ██║
+╚██╗ ██╔╝██║     ██║     ██║
+ ╚████╔╝ ╚██████╗███████╗██║
+  ╚═══╝   ╚═════╝╚══════╝╚═╝</span>
+<span class="term-bright">code-vcli v1.0.0</span>  <span class="term-muted">未初始化 · 请先运行 init</span>
+
+<span class="term-border">┌──────────────────────────────┐
+│</span>  欢迎使用 code-vcli          <span class="term-border">│
+└──────────────────────────────┘</span>
+<span class="term-muted">为 AI 模型提供 Web 开发视觉能力</span>
+
+<span class="term-accent">❯</span> 1. 初始化          <span class="term-muted">安装视觉模型环境（Python + 模型权重）</span>
+  2. 查看环境          <span class="term-muted">显示 code-vcli 与系统环境信息</span>
+  3. 检查版本更新      <span class="term-muted">比较 npm Registry 最新版本</span>
+  4. 查看帮助          <span class="term-muted">显示所有命令与参数</span>
+  5. 退出              <span class="term-muted">结束 code-vcli</span>
+
+<span class="term-muted">↑/↓ 选择 · Enter 确认 · Esc 退出</span></pre>
+              </div>
+            </div>
+          </div>
+          <div class="laptop-base"></div>
+        </div>
+
+        <div class="installer-card">
+          <div class="install-head">
+            <span class="install-tag">快速安装</span>
+            <span class="install-meta">跨平台 · 需 Node.js 22+ 和 Python 3.10+</span>
+          </div>
+          <div class="install-command">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="install-code">npm i code-vcli</code>
+            <button type="button" class="copy-btn" data-copy="install-code" aria-label="复制安装命令">复制</button>
+          </div>
+          <p class="install-hint">安装完成后重新打开终端即可使用 <code>vcli</code> 命令。Windows 使用 <code>where vcli</code>，macOS/Linux 使用 <code>which vcli</code> 查看路径。</p>
+          <p class="install-hint">重置环境：<code>vcli reset</code> — 删除工作区数据，需重新 init。</p>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <a href="https://github.com/GuSheng107/code-vcli" target="_blank" rel="noreferrer">GitHub ↗</a>
+      <p>code-vcli · 为 AI 模型提供 Web 开发视觉能力</p>
+    </footer>
+    <div class="toast" role="status" aria-live="polite">已复制</div>
+  </body>
+</html>
