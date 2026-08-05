@@ -34,4 +34,4 @@ vcli run ./screenshot.png --web --json   # Web 模式 + JSON 输出
 
 ## 许可
 
-[AGPL-3.0-or-later](./LICENSE)。
+[MIT](./LICENSE)。
