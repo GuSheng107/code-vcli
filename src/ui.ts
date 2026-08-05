@@ -11,6 +11,7 @@ export interface InteractiveMenuItem<T extends string = string> {
 export type InteractiveAction =
   | "init"
   | "run"
+  | "reset"
   | "info"
   | "update"
   | "help"
@@ -18,6 +19,7 @@ export type InteractiveAction =
 
 const UNINITIALIZED_MENU_ITEMS: Array<InteractiveMenuItem<InteractiveAction>> = [
   { value: "init", label: "初始化", description: "安装视觉模型环境（Python + 模型权重）" },
+  { value: "reset", label: "重置环境", description: "删除工作区数据，需重新 init" },
   { value: "info", label: "查看环境", description: "显示 code-vcli 与系统环境信息" },
   { value: "update", label: "检查版本更新", description: "比较 npm Registry 最新版本" },
   { value: "help", label: "查看帮助", description: "显示所有命令与参数" },
@@ -27,6 +29,7 @@ const UNINITIALIZED_MENU_ITEMS: Array<InteractiveMenuItem<InteractiveAction>> = 
 const INITIALIZED_MENU_ITEMS: Array<InteractiveMenuItem<InteractiveAction>> = [
   { value: "run", label: "识别图片", description: "对图片执行视觉识别（PP-OCRv6 / + YOLO Web 模式）" },
   { value: "init", label: "重新初始化", description: "重装视觉模型环境" },
+  { value: "reset", label: "重置环境", description: "删除工作区数据，需重新 init" },
   { value: "info", label: "查看环境", description: "显示 code-vcli 与系统环境信息" },
   { value: "update", label: "检查版本更新", description: "比较 npm Registry 最新版本" },
   { value: "help", label: "查看帮助", description: "显示所有命令与参数" },

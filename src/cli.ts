@@ -3,11 +3,11 @@
 import { stderr, stdout } from "node:process";
 import os from "node:os";
 import path from "node:path";
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 
 import { ConfigStore, resolveWorkspacePath } from "./config.js";
 import { VcliError, toVcliError } from "./errors.js";
-import { promptEnterOrEscape, promptText } from "./input.js";
+import { promptEnterOrEscape, promptText, promptYesNo } from "./input.js";
 import { compareVersions, getLatestVersion, installCurrentPackage, updateFromRegistry } from "./installer.js";
 import { getPackageInfo } from "./package-info.js";
 import { getConfigRoot } from "./paths.js";
@@ -42,6 +42,7 @@ Commands:
   code-vcli                  打开交互界面
   init [--yes] [--workspace <path>] [--reset-workspace]  初始化视觉模型环境
   run <image> [options]      对图片执行视觉识别
+  reset                      重置环境（删除工作区数据，需重新 init）
   info                       显示 code-vcli 与系统环境信息
   update                     从 npm Registry 更新到最新版
   install [--force]          安装到用户目录并加入 PATH
@@ -82,6 +83,7 @@ Examples:
   code-vcli run ./image.png --json
   code-vcli run ./image.png --web
   code-vcli run ./image.png --web --json
+  code-vcli reset
   code-vcli info
   code-vcli update
   code-vcli help
@@ -224,9 +226,13 @@ async function runInitCommand(
     await configStore.setWorkspace(resolved);
     stdout.write(`工作区已设置为：${resolved}\n`);
   } else {
-    // 选择工作区路径（首次 init 或 --reset-workspace 时提示）
+    // 选择工作区路径（首次 init、--reset-workspace 或工作区目录已不存在时提示）
     const currentWorkspace = await configStore.getWorkspace();
-    const configExists = currentWorkspace !== getConfigRoot();
+    let workspaceDirExists = false;
+    try {
+      workspaceDirExists = (await stat(currentWorkspace)).isDirectory();
+    } catch { /* 目录不存在或无法访问 */ }
+    const configExists = currentWorkspace !== getConfigRoot() && workspaceDirExists;
     if (!configExists || resetWorkspace) {
       if (yes) {
         // --yes 模式使用默认路径或已有路径
@@ -370,6 +376,29 @@ async function runInstallCommand(args: string[]): Promise<void> {
   stdout.write(`code-vcli 已安装到 ${directory}\n请重新打开终端使 PATH 生效。\n`);
 }
 
+async function runResetCommand(configStore: ConfigStore): Promise<void> {
+  const workspace = await configStore.getWorkspace();
+  stdout.write(`即将删除工作区：${workspace}\n`);
+  stdout.write("这将删除所有模型权重、Python 虚拟环境和配置文件。\n");
+  const confirmed = await promptYesNo("确定要重置环境？ [y/n]：");
+  if (!confirmed) {
+    stdout.write("已取消重置。\n");
+    return;
+  }
+  // 删除工作区目录（venv + models + state.json 等）
+  try {
+    await rm(workspace, { recursive: true, force: true });
+    stdout.write("工作区已删除。\n");
+  } catch (error) {
+    throw new VcliError("RESET_ERROR", `无法删除工作区：${workspace}`, 5, { cause: error });
+  }
+  // 重置 config.json 中的 workspace 为默认值
+  await configStore.setWorkspace(getConfigRoot());
+  // 重置 state.json 为未初始化状态
+  await configStore.reset();
+  stdout.write("环境已重置。请运行 code-vcli init 重新初始化。\n");
+}
+
 async function pauseInteractive(): Promise<void> {
   await promptEnterOrEscape("\nEnter 或 Esc 返回主菜单");
 }
@@ -433,6 +462,9 @@ async function runInteractive(configStore: ConfigStore): Promise<void> {
       } else if (action === "info") {
         renderInteractivePage(packageInfo.version, initialized, items, "环境信息");
         await runInfoCommand(configStore, stateStore);
+      } else if (action === "reset") {
+        renderInteractivePage(packageInfo.version, initialized, items, "重置环境");
+        await runResetCommand(configStore);
       } else if (action === "update") {
         renderInteractivePage(packageInfo.version, initialized, items, "检查版本更新");
         const latest = await getLatestVersion();
@@ -491,6 +523,9 @@ async function main(): Promise<void> {
       return;
     case "info":
       await runInfoCommand(configStore, stateStore);
+      return;
+    case "reset":
+      await runResetCommand(configStore);
       return;
     case "version":
       await runVersionCommand(commandArgs);

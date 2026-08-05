@@ -4,6 +4,7 @@ export type ErrorCode =
   | "CONFIG_INVALID"
   | "INSTALL_ERROR"
   | "UPDATE_ERROR"
+  | "RESET_ERROR"
   | "CANCELLED"
   | "IMAGE_READ_ERROR"
   | "IMAGE_FORMAT_UNSUPPORTED"
