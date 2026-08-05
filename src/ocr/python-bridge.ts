@@ -13,6 +13,7 @@ import type { VisionRecognitionResult, PythonOutput } from "./types.js";
 
 interface PythonBridgeOptions {
   timeoutMs?: number;
+  minConfidence?: number;
 }
 
 export function getVenvPython(featureDirectory: string): string {
@@ -112,6 +113,9 @@ export async function runVisionInference(
   const args = ["--image", imagePath, "--ocr", ocrEngine];
   if (webMode) {
     args.push("--web");
+    if (options.minConfidence !== undefined) {
+      args.push("--min-confidence", String(options.minConfidence));
+    }
   }
 
   const output = await executePython(

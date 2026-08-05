@@ -59,6 +59,7 @@ Run Options:
   -w, --web                  启用 YOLO UI 元素检测（网页/UI 场景）
       --json                 输出适合 AI 读取的 JSON
       --timeout <seconds>    本次推理超时
+      --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
   -h, --help                 显示帮助
 
 OCR Engine:
@@ -92,6 +93,7 @@ interface RunArguments {
   web: boolean;
   json: boolean;
   timeoutMs?: number;
+  minConfidence?: number;
 }
 
 function isVisionOcrEngine(value: string): value is VisionOcrEngineType {
@@ -125,6 +127,13 @@ function parseRunArguments(args: string[]): RunArguments {
         throw new VcliError("INVALID_ARGUMENT", "--timeout 必须是正数秒", 2);
       }
       parsed.timeoutMs = Math.round(seconds * 1000);
+    } else if (arg === "--min-confidence") {
+      const value = Number(requireOptionValue(args, index, arg));
+      index += 1;
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new VcliError("INVALID_ARGUMENT", "--min-confidence 必须在 0~1 之间", 2);
+      }
+      parsed.minConfidence = value;
     } else if (arg?.startsWith("-")) {
       throw new VcliError("INVALID_ARGUMENT", `未知参数：${arg}`, 2);
     } else if (arg !== undefined) {
@@ -264,6 +273,7 @@ async function runRunCommand(
 
   const result = await runVisionInference(stateStore, imagePath, ocrEngine, webMode, {
     ...(parsed.timeoutMs ? { timeoutMs: parsed.timeoutMs } : {}),
+    ...(parsed.minConfidence !== undefined ? { minConfidence: parsed.minConfidence } : {}),
   });
 
   if (parsed.json) {

@@ -60,6 +60,8 @@ YOLO_MODEL_DISPLAY = "OmniParser V2 YOLO"
 
 # YOLO 置信度阈值
 BOX_THRESHOLD = 0.25
+# 空 UI 元素保留阈值：text 为空且 confidence 低于该值的 YOLO 误检直接丢弃
+DEFAULT_MIN_UI_CONFIDENCE = 0.55
 # OCR 文字框与 YOLO UI 框的 IoU 阈值，超过则认为文字属于该 UI 元素
 IOU_MATCH_THRESHOLD = 0.3
 # 文字框与 UI 框中心点距离阈值（像素），用于辅助匹配
@@ -78,7 +80,8 @@ def log(message: str) -> None:
 
 
 def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    # 紧凑序列化：去掉无意义空格，缩小 JSON 体积约 5~10%
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 def emit_error(code: str, message: str) -> None:
@@ -224,10 +227,9 @@ def run_ppocr(image_path: str) -> tuple[str, list[dict[str, Any]]]:
         if index < len(scores) and scores[index] is not None:
             item["confidence"] = float(scores[index])
         if index < len(boxes) and boxes[index] is not None:
-            pts = [[int(point[0]), int(point[1])] for point in boxes[index]]
-            item["box"] = pts
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
+            pts = boxes[index]
+            xs = [int(p[0]) for p in pts]
+            ys = [int(p[1]) for p in pts]
             item["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
         items.append(item)
 
@@ -266,7 +268,6 @@ def run_yolo_detection(image_path: str) -> list[dict[str, Any]]:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             conf = float(box.conf[0])
             detections.append({
-                "box": [[int(x1), int(y1)], [int(x2), int(y1)], [int(x2), int(y2)], [int(x1), int(y2)]],
                 "bbox": [int(x1), int(y1), int(x2), int(y2)],
                 "confidence": conf,
                 "source": "yolo",
@@ -339,7 +340,6 @@ def assign_text_to_ui(
         avg_conf = sum(t[1] for t in texts) / len(texts) if texts else ui["confidence"]
         ui_with_text.append({
             "text": merged_text,
-            "box": ui["box"],
             "bbox": ui_bbox,
             "confidence": round(avg_conf, 4),
             "type": "ui_element" if not merged_text else "ui_text",
@@ -357,6 +357,7 @@ def assign_text_to_ui(
 def merge_web_results(
     image_path: str,
     ocr_items: list[dict[str, Any]],
+    min_ui_confidence: float,
 ) -> tuple[str, list[dict[str, Any]], str]:
     """网页模式：OCR 全图 + YOLO UI 定位 + 合并。"""
     log("Web 模式：OCR 全图识别 + YOLO UI 定位")
@@ -366,12 +367,25 @@ def merge_web_results(
 
     ui_with_text, unassigned = assign_text_to_ui(ocr_items, ui_items)
 
+    # 过滤空 + 低置信度的 UI 误检：text 为空且 confidence < 阈值直接丢弃
+    before = len(ui_with_text)
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for item in ui_with_text:
+        if not item.get("text") and item.get("confidence", 0.0) < min_ui_confidence:
+            dropped += 1
+            continue
+        kept.append(item)
+    ui_with_text = kept
+    if dropped:
+        log(f"过滤 {dropped}/{before} 个空+低置信（<{min_ui_confidence}）UI 误检")
+
     # 合并所有元素：UI 元素 + 未匹配的 OCR 段落
     all_items = ui_with_text + unassigned
 
     # 排序：从上到下、从左到右
     def sort_key(item: dict[str, Any]) -> tuple[int, int]:
-        bbox = item.get("bbox") or item.get("box")
+        bbox = item.get("bbox")
         if bbox:
             return (bbox[1], bbox[0])
         return (0, 0)
@@ -391,7 +405,7 @@ def merge_web_results(
     return text, all_items, model_name
 
 
-def run_inference(image_path: str, ocr_engine: str, web_mode: bool) -> None:
+def run_inference(image_path: str, ocr_engine: str, web_mode: bool, min_ui_confidence: float) -> None:
     try:
         text, ocr_items = run_ppocr(image_path)
     except ImportError as exc:
@@ -406,7 +420,7 @@ def run_inference(image_path: str, ocr_engine: str, web_mode: bool) -> None:
         sys.exit(1)
 
     if web_mode:
-        text, items, model_name = merge_web_results(image_path, ocr_items)
+        text, items, model_name = merge_web_results(image_path, ocr_items, min_ui_confidence)
     else:
         items = ocr_items
         model_name = PPOCR_MODEL_DISPLAY
@@ -454,6 +468,12 @@ def main() -> None:
     parser.add_argument("--image", help="图片文件路径")
     parser.add_argument("--ocr", choices=["ppocrv6"], default="ppocrv6", help="OCR 引擎（默认 ppocrv6）")
     parser.add_argument("--web", action="store_true", help="启用 YOLO UI 元素检测（网页/UI 场景）")
+    parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=DEFAULT_MIN_UI_CONFIDENCE,
+        help=f"空 UI 元素保留阈值（默认 {DEFAULT_MIN_UI_CONFIDENCE}，仅 --web 生效）",
+    )
     args = parser.parse_args()
 
     if args.init:
@@ -479,7 +499,7 @@ def main() -> None:
         sys.exit(1)
 
     ensure_models_ready()
-    run_inference(args.image, args.ocr, args.web)
+    run_inference(args.image, args.ocr, args.web, args.min_confidence)
 
 
 if __name__ == "__main__":

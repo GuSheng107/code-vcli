@@ -69,12 +69,22 @@ vcli init --yes
 vcli init --yes --workspace "E:\code-vcli-data"
 ```
 
+初始化会在工作区下自动创建 `files/` 文件夹，建议把待识别的截图统一放到这里方便管理。通过 `vcli info` 可查看当前工作区路径。
+
+```text
+~/.code-vcli/              工作区（默认）
+├── files/                 截图存放目录（init 时自动创建）
+├── models/                模型权重
+└── venv/                  Python 虚拟环境
+```
+
 ## 使用
 
 ```bash
 vcli run ./image.png              # 普通模式：整图 OCR
 vcli run ./screenshot.png --web   # Web 模式：网页截图，叠加 YOLO 元素检测
 vcli run ./image.png --json       # JSON 输出（AI 调用建议始终加 --json）
+vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下的截图
 ```
 
 ### AI 调用场景
@@ -104,19 +114,19 @@ vcli run ./webpage.png --web --json
 }
 ```
 
-Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输入框、卡片等 UI 元素，通过 IoU、中心点距离、面积比把文字归到对应元素上，最后按位置排序输出。
+Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输入框、卡片等 UI 元素，通过 IoU、中心点距离、面积比把文字归到对应元素上，最后按位置排序输出。空文本且置信度低于 `--min-confidence`（默认 0.55）的 UI 误检会自动丢弃。
 
 ## AI Agent Skill
 
-仓库提供 `code-vcli` Skill，让 AI Agent 调用 `vcli` CLI 对截图执行本地视觉识别与网页 UI 元素解析。
+仓库提供 `code-vcli` Skill，让 AI Agent 调用 `vcli` CLI 对截图执行本地视觉识别与网页 UI 元素解析。Skill 内含完整的 CLI 安装、初始化、调用流程，Agent 加载后即可知道如何使用 `vcli`。
 
-推荐通过 Skills CLI 全局安装：
+推荐通过 Skills CLI 全局安装（会自动放入对应 Agent 的 skills 目录）：
 
 ```bash
 npx skills add GuSheng107/code-vcli --skill code-vcli -g
 ```
 
-也可以在[文档站 Skills 页面](https://gusheng107.github.io/code-vcli/skills.html)下载 ZIP 手动安装。
+也可以在[文档站 Skills 页面](https://gusheng107.github.io/code-vcli/skills.html)下载 ZIP 手动安装，解压后将 `code-vcli` 文件夹放入所用 Agent 的 skills 目录即可。
 
 ## 命令
 
@@ -139,6 +149,7 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 -w, --web                  网页/UI 场景
     --json                 JSON 输出
     --timeout <seconds>    推理超时
+    --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
 ```
 
 支持 `png` / `jpg` / `jpeg` / `webp` / `bmp` / `tiff` / `tif`，上限 20 MB。
@@ -152,7 +163,7 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 
 - 图片本地处理不上传，无遥测。
 - 模型缓存位置：`~/.code-vcli/models/`
-- 工作区：`~/.code-vcli/` 或自定义路径
+- 工作区：`~/.code-vcli/` 或自定义路径，截图建议放到工作区下的 `files/`
 
 ## 开发
 

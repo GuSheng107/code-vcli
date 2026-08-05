@@ -3,7 +3,7 @@ import type { VisionOcrEngineType } from "./constants.js";
 export interface VisionItem {
   text: string;
   confidence?: number;
-  box?: Array<[number, number]>;
+  bbox?: [number, number, number, number];
   source?: string;
   type?: string;
 }

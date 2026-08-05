@@ -11,7 +11,50 @@ description: 使用 vcli CLI 对截图/图片执行本地视觉识别（OCR）�
 
 - 已执行过 `vcli init`（首次使用会下载模型，约 1-2 GB）。
 - 若返回 `MODEL_NOT_INSTALLED`，则需要先运行 `vcli init`。
-- 支持 Node.js 22+。
+- 支持 Node.js 22+ 与 Python 3.10+。
+
+## 安装与初始化
+
+首次使用需安装 CLI 并初始化视觉模型环境。Agent 在调用前应先确认 `vcli` 可用，必要时引导用户完成以下步骤：
+
+```bash
+# 1. 安装 CLI（需要 Node.js 22+）
+npm i -g code-vcli
+
+# 2. 初始化视觉模型环境（创建 venv、选计算模式、下载模型，约 1-2 GB）
+vcli init
+
+# 跳过交互用默认值：
+vcli init --yes
+# 指定工作区路径：
+vcli init --yes --workspace "E:\code-vcli-data"
+
+# 3. 查看环境信息（含工作区路径、Python、模型状态）
+vcli info
+
+# 4. 更新到最新版
+vcli update
+```
+
+## 工作区与截图管理
+
+`vcli init` 会创建工作区（默认 `~/.code-vcli/`，可用 `--workspace <path>` 自定义），并在其中创建 `files/` 文件夹用于存放截图。
+
+```text
+~/.code-vcli/              工作区（默认，可用 vcli info 查看）
+├── files/                 截图存放目录（init 时自动创建）
+├── models/                模型权重
+├── venv/                  Python 虚拟环境
+└── state.json             状态文件
+```
+
+> 建议引导用户把待识别的截图统一放到 `files/` 文件夹，方便集中管理与复用。通过 `vcli info` 可查看当前工作区路径。
+
+调用时直接引用 `files/` 下的文件：
+
+```bash
+vcli run ~/.code-vcli/files/login.png --web --json
+```
 
 ## 模式选择准则
 
@@ -21,7 +64,7 @@ description: 使用 vcli CLI 对截图/图片执行本地视觉识别（OCR）�
 | 普通文档 / 扫描件 / 纯文字图片 | 默认（普通模式，PP-OCRv6） | `vcli run ./image.png --json` |
 | 不确定图片类型 | 先向用户确认是「网页/UI」还是「普通文档」再选择 | — |
 
-> 普通模式只做整图 OCR，速度快、带坐标；Web 模式额外运行 YOLO 检测 UI 元素位置，并把文字合并到元素上，适合网页/界面截图。普通文档无需启用 `--web`。
+> 普通模式只做整图 OCR，速度快、带坐标；Web 模式额外运行 YOLO 检测 UI 元素位置，并把文字合并到元素上，适合网页/界面截图。普通文档无需启用 `--web`。Web 模式下，空文本且置信度低于 `--min-confidence`（默认 0.55）的 UI 误检会自动丢弃。
 
 ## 调用示例
 
@@ -48,6 +91,7 @@ vcli run ./webpage.png --web --json
 | `-w, --web` | 启用 YOLO UI 元素检测（网页/UI 场景） |
 | `--json` | 输出适合 AI 读取的 JSON |
 | `--timeout <seconds>` | 本次推理超时（秒） |
+| `--min-confidence <0~1>` | 空 UI 元素保留阈值（默认 0.55，仅 `--web` 生效）。空文本且置信度低于该值的 YOLO 误检自动丢弃 |
 
 ## JSON 输出字段
 
@@ -59,7 +103,6 @@ vcli run ./webpage.png --web --json
     {
       "text": "登录",
       "confidence": 0.98,
-      "box": [[10, 20], [60, 20], [60, 40], [10, 40]],
       "bbox": [10, 20, 60, 40],
       "source": "yolo+ocr",
       "type": "ui_text"
@@ -86,7 +129,6 @@ vcli run ./webpage.png --web --json
 | --- | --- | --- |
 | `text` | string | 该项文字；Web 模式下为 UI 元素内合并后的文字 |
 | `confidence` | number | 置信度（0~1） |
-| `box` | array | 四边形 4 个顶点坐标 `[[x1,y1],[x2,y2],[x3,y3],[x4,y4]]` |
 | `bbox` | array | 轴对齐矩形 `[x1, y1, x2, y2]` |
 | `source` | string | `ppocr`（OCR 文字）\| `yolo`（UI 检测）\| `yolo+ocr`（合并项） |
 | `type` | string | 仅 Web 模式：`ui_element`（无文字的元素）\| `ui_text`（含文字的 UI 元素） |

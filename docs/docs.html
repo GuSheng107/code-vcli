@@ -139,6 +139,7 @@
             <div class="opt-row"><code>-w, --web</code><span>启用 YOLO UI 元素检测（网页/UI 场景）</span><span class="dim">关闭</span></div>
             <div class="opt-row"><code>--json</code><span>输出适合 AI 读取的 JSON</span><span class="dim">关闭</span></div>
             <div class="opt-row"><code>--timeout &lt;seconds&gt;</code><span>本次推理超时（秒），必须为正数</span><span class="dim">—</span></div>
+            <div class="opt-row"><code>--min-confidence &lt;0~1&gt;</code><span>空 UI 元素保留阈值（仅 <code>--web</code>）。空文本且置信度低于该值的误检自动丢弃</span><span class="dim">0.55</span></div>
             <div class="opt-row"><code>-h, --help</code><span>显示 CLI 帮助</span><span class="dim">—</span></div>
           </div>
           <h3 class="sub-h">示例</h3>
@@ -149,7 +150,7 @@
           <h3 class="sub-h">模式说明</h3>
           <div class="mode-summary">
             <div><strong>普通模式</strong><span>整图 OCR，速度快、带坐标。PP-OCRv6（RapidOCR + OpenVINO），支持中英日等 50 种语言</span></div>
-            <div><strong>Web 模式 <code>-w</code></strong><span>叠加 OmniParser V2 YOLO 检测 UI 元素位置，通过 IoU、中心点距离、面积比把文字归到对应元素上，按位置排序输出</span></div>
+            <div><strong>Web 模式 <code>-w</code></strong><span>叠加 OmniParser V2 YOLO 检测 UI 元素位置，通过 IoU、中心点距离、面积比把文字归到对应元素上，按位置排序输出。空文本且置信度低于 <code>--min-confidence</code>（默认 0.55）的误检自动丢弃</span></div>
           </div>
           <p class="doc-note">Web 模式仅在网页/UI 截图场景使用，普通文档截图无需启用 <code>--web</code>。</p>
         </article>
@@ -226,7 +227,6 @@
     {
       "text": "登录",
       "confidence": 0.98,
-      "box": [[10,20],[60,20],[60,40],[10,40]],
       "bbox": [10,20,60,40],
       "source": "yolo+ocr",
       "type": "ui_text"
@@ -263,7 +263,6 @@
             <div class="opt-row opt-head"><span>字段</span><span>类型</span><span>说明</span></div>
             <div class="opt-row"><code>text</code><span>string</span><span>该项文字；Web 模式下为合并后的文字</span></div>
             <div class="opt-row"><code>confidence</code><span>number</span><span>置信度（0~1）</span></div>
-            <div class="opt-row"><code>box</code><span>array</span><span>四边形 4 顶点坐标 [[x1,y1]...]</span></div>
             <div class="opt-row"><code>bbox</code><span>array</span><span>轴对齐矩形 [x1,y1,x2,y2]</span></div>
             <div class="opt-row"><code>source</code><span>string</span><span>ppocr / yolo / yolo+ocr</span></div>
             <div class="opt-row"><code>type</code><span>string</span><span>仅 Web 模式：ui_element / ui_text</span></div>
