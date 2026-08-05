@@ -9,7 +9,16 @@ AI 编码模型（如 GLM、DeepSeek、Qwen-max）能写代码，但**无法「�
 ## 安装
 
 ```bash
-npm i code-vcli
+# 克隆仓库
+git clone https://git.dianplus.cn/shanfan/code-vcli.git
+cd code-vcli
+
+# 安装依赖并构建
+npm install
+npm run build
+
+# 全局安装
+npm install -g .
 ```
 
 安装过程会自动部署运行依赖、用户级 `vcli` 启动入口并加入 PATH。首次安装后重新打开终端，即可直接运行：
