@@ -125,7 +125,7 @@ export async function runVisionInference(
     { ...options, env: { VCLI_CONFIG_ROOT: stateStore.directory } },
   );
 
-  if (!output.ok) {
+  if (output.ok === false) {
     const code = output.error?.code ?? "MODEL_RECOGNITION_FAILED";
     const message = output.error?.message ?? "视觉识别失败";
     throw new VcliError(mapPythonError(code), message, 6);
@@ -139,10 +139,8 @@ export async function runVisionInference(
   return {
     text: output.text ?? items.map((item) => item.text).join("\n"),
     items,
-    engine: output.engine ?? (webMode ? "web" : ocrEngine),
-    ocr: output.ocr ?? ocrEngine,
-    model: output.model ?? "",
-  };
+    ...(output.layout ? { layout: output.layout } : {}),
+  } as VisionRecognitionResult;
 }
 
 interface ExecutePythonOptions extends PythonBridgeOptions {

@@ -85,7 +85,7 @@ vcli init --yes --workspace "E:\code-vcli-data"
 ```bash
 vcli run ./image.png              # 普通模式：整图 OCR
 vcli run ./screenshot.png --web   # Web 模式：网页截图，叠加 YOLO 元素检测
-vcli run ./image.png --json       # JSON 输出（AI 调用建议始终加 --json）
+vcli run ./image.png --json       # JSON 输出（自动保存到工作区 files/，返回文件路径）
 vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下的截图
 ```
 
@@ -101,18 +101,24 @@ vcli run ./webpage.png --web --json
 
 ```json
 {
-  "ok": true,
   "text": "登录\n注册\n用户名",
   "items": [
     {
       "text": "登录",
-      "confidence": 0.98,
       "bbox": [10, 20, 60, 40],
-      "source": "yolo+ocr",
-      "type": "ui_text"
+      "type": "ui_text",
+      "geometry": {"aspect": 2.5, "region": "top-center"},
+      "cluster": {"id": 0, "size": 3, "arrangement": "vertical", "region": "center"}
     }
   ],
-  "engine": "web"
+  "layout": {
+    "img_size": [1920, 1080],
+    "item_count": 12,
+    "patterns": {"has_top_nav": true, "has_form": true},
+    "cluster_summary": [
+      {"id": 0, "size": 3, "arrangement": "vertical", "region": "center"}
+    ]
+  }
 }
 ```
 
@@ -149,7 +155,7 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 <image>                    图片路径（必填）
     --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
 -w, --web                  网页/UI 场景
-    --json                 JSON 输出
+    --json                 输出 AI 可读的 JSON（自动保存到工作区 files/）
     --timeout <seconds>    推理超时
     --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
 ```
@@ -177,6 +183,8 @@ npm run build:skill-zip  # 生成 Skill 下载包
 ```
 
 要求 Node.js 22 或更高版本。
+
+Web 模式额外输出布局分析信息（`layout` 页面模式 + `geometry`/`cluster`/`relations`/`text_features` 每个元素的结构线索），供 LLM 推断元素意图，语言无关。详见 [skills/code-vcli/SKILL.md](skills/code-vcli/SKILL.md)。
 
 ## 许可
 

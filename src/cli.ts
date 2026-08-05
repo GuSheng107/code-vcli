@@ -57,7 +57,7 @@ Run Options:
   <image>                    图片文件路径（必填）
       --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
   -w, --web                  启用 YOLO UI 元素检测（网页/UI 场景）
-      --json                 输出适合 AI 读取的 JSON
+      --json                 输出 AI 可读的 JSON（自动保存到工作区 files/）
       --timeout <seconds>    本次推理超时
       --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
   -h, --help                 显示帮助
@@ -277,14 +277,20 @@ async function runRunCommand(
   });
 
   if (parsed.json) {
-    stdout.write(`${JSON.stringify({
-      ok: true,
+    const payload = {
       text: result.text,
       items: result.items,
-      engine: result.engine,
-      ocr: result.ocr,
-      model: result.model,
-    }, null, 2)}\n`);
+      ...(result.layout ? { layout: result.layout } : {}),
+    };
+
+    // 保存 JSON 到工作区 files 文件夹
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const filesDir = path.join(stateStore.directory, "files");
+    await mkdir(filesDir, { recursive: true });
+    const imageName = path.basename(imagePath, path.extname(imagePath));
+    const outputPath = path.join(filesDir, `${imageName}_output.json`);
+    await writeFile(outputPath, JSON.stringify(payload, null, 2), "utf8");
+    stdout.write(`${outputPath}\n`);
   } else {
     stdout.write(`${result.text}\n`);
   }

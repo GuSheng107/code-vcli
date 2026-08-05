@@ -98,41 +98,64 @@ vcli run ./webpage.png --web --json
 
 ```json
 {
-  "ok": true,
-  "text": "第一行\n第二行",
+  "text": "登录\nuser@example.com",
   "items": [
     {
       "text": "登录",
-      "confidence": 0.98,
       "bbox": [10, 20, 60, 40],
-      "source": "yolo+ocr",
-      "type": "ui_text"
+      "type": "ui_text",
+      "geometry": {"aspect": 2.5, "region": "top-right"},
+      "cluster": {"id": 0, "size": 5, "arrangement": "horizontal", "region": "top"}
     }
   ],
-  "engine": "web",
-  "ocr": "ppocrv6",
-  "model": "OmniParser V2 YOLO + PP-OCRv6 (RapidOCR + OpenVINO)"
+  "layout": {
+    "img_size": [1920, 1080],
+    "item_count": 12,
+    "patterns": {
+      "has_top_nav": true,
+      "has_form": false,
+      "has_grid": false,
+      "has_sidebar": false,
+      "has_footer": false
+    },
+    "cluster_summary": [
+      {"id": 0, "size": 5, "arrangement": "horizontal", "region": "top"}
+    ]
+  }
 }
 ```
 
 | 顶层字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `ok` | boolean | 是否成功 |
 | `text` | string | 全文识别结果，各项用 `\n` 连接 |
 | `items` | array | 识别项数组 |
-| `engine` | string | `web`（Web 模式）或 `ppocrv6`（普通模式） |
-| `ocr` | string | OCR 引擎，当前为 `ppocrv6` |
-| `model` | string | 实际使用的模型显示名 |
+| `layout` | object | 仅 Web 模式：页面级布局分析（聚类、页面模式），用于辅助 LLM 推断意图，详见下方说明 |
 
 `items[]` 结构：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `text` | string | 该项文字；Web 模式下为 UI 元素内合并后的文字 |
-| `confidence` | number | 置信度（0~1） |
 | `bbox` | array | 轴对齐矩形 `[x1, y1, x2, y2]` |
-| `source` | string | `ppocr`（OCR 文字）\| `yolo`（UI 检测）\| `yolo+ocr`（合并项） |
 | `type` | string | 仅 Web 模式：`ui_element`（无文字的元素）\| `ui_text`（含文字的 UI 元素） |
+| `geometry` | object | 仅 Web 模式：几何特征（宽高比、九宫格区域），语言无关 |
+| `cluster` | object | 仅 Web 模式：所属空间聚类信息（组内元素数、排列方式、区域） |
+
+### 布局分析说明（仅 Web 模式）
+
+`layout.patterns` 字段提供页面级结构线索，完全基于空间关系，**语言无关**：
+
+| 模式 | 含义 |
+| --- | --- |
+| `has_top_nav` | 顶部有横向排列的导航栏 |
+| `has_form` | 中心区域有纵向排列的表单 |
+| `has_grid` | 有网格状排列的卡片/图标 |
+| `has_sidebar` | 左侧有纵向侧边栏 |
+| `has_footer` | 底部有横向页脚 |
+
+`items[].geometry` 提供单元素几何特征：`region` 为九宫格区域（top-left / top-center / top-right / center / bottom-left 等），`aspect` 为宽高比（>8 多为输入框或按钮，<1.2 多为图标）。
+
+> LLM 结合 `geometry` + `cluster` + `layout.patterns` 可推断元素意图（如 `cluster` 为 form 区域 + `geometry.aspect` > 8 → 输入框；`cluster` 为 top nav + `type` 为 ui_text → 导航按钮），无需硬编码关键词。
 
 ## 错误码对照表
 

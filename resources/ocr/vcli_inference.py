@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -354,13 +355,279 @@ def assign_text_to_ui(
     return ui_with_text, unassigned
 
 
+# ---------------------------------------------------------------------------
+# 页面布局分析（通用结构线索，语言无关）
+# ---------------------------------------------------------------------------
+def compute_geometry(bbox: list[int], img_w: int, img_h: int) -> dict[str, Any]:
+    """计算单个元素的几何特征：宽高比、九宫格区域。"""
+    x1, y1, x2, y2 = bbox
+    w = x2 - x1
+    h = y2 - y1
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+
+    # 九宫格定位
+    rel_x = cx / img_w if img_w > 0 else 0.5
+    rel_y = cy / img_h if img_h > 0 else 0.5
+    if rel_y < 0.33:
+        v = "top"
+    elif rel_y < 0.66:
+        v = "middle"
+    else:
+        v = "bottom"
+    if rel_x < 0.33:
+        hz = "left"
+    elif rel_x < 0.66:
+        hz = "center"
+    else:
+        hz = "right"
+    region = f"{v}-{hz}" if v != "middle" or hz != "center" else "center"
+
+    return {
+        "aspect": round(w / max(1, h), 2),
+        "region": region,
+    }
+
+
+def _cluster_items(items: list[dict[str, Any]]) -> list[list[int]]:
+    """按空间邻近度聚类 UI 元素（并查集）。
+
+    两个元素的中心距 < 平均特征尺寸 × 1.5 则归为同一组。
+    平均特征尺寸 = 所有元素 (w+h)/2 的均值。
+    这是 web 页面的通用规律：同组间距 < 元素尺寸。
+    """
+    n = len(items)
+    if n <= 1:
+        return [[i] for i in range(n)]
+
+    centers: list[tuple[float, float]] = []
+    char_sizes: list[float] = []
+    for item in items:
+        b = item.get("bbox", [0, 0, 0, 0])
+        cx = (b[0] + b[2]) / 2.0
+        cy = (b[1] + b[3]) / 2.0
+        w = max(1, b[2] - b[0])
+        h = max(1, b[3] - b[1])
+        centers.append((cx, cy))
+        char_sizes.append((w + h) / 2.0)
+
+    avg_char_size = sum(char_sizes) / n
+    threshold = avg_char_size * 1.5
+
+    parent = list(range(n))
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def _union(x: int, y: int) -> None:
+        px, py = _find(x), _find(y)
+        if px != py:
+            parent[py] = px
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = centers[i][0] - centers[j][0]
+            dy = centers[i][1] - centers[j][1]
+            if (dx * dx + dy * dy) ** 0.5 < threshold:
+                _union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        p = _find(i)
+        groups.setdefault(p, []).append(i)
+    return list(groups.values())
+
+
+def _arrangement(indices: list[int], items: list[dict[str, Any]]) -> str:
+    """判断组内排列方式：horizontal / vertical / grid / single / scattered。"""
+    n = len(indices)
+    if n <= 1:
+        return "single"
+    bboxes = [items[i].get("bbox", [0, 0, 0, 0]) for i in indices]
+    cxs = [(b[0] + b[2]) / 2.0 for b in bboxes]
+    cys = [(b[1] + b[3]) / 2.0 for b in bboxes]
+
+    if n == 2:
+        dx = abs(cxs[0] - cxs[1])
+        dy = abs(cys[0] - cys[1])
+        if dx > dy * 2:
+            return "horizontal"
+        if dy > dx * 2:
+            return "vertical"
+        return "scattered"
+
+    # 3+ items：用标准差判断主方向
+    mean_x = sum(cxs) / n
+    mean_y = sum(cys) / n
+    var_x = sum((x - mean_x) ** 2 for x in cxs) / n
+    var_y = sum((y - mean_y) ** 2 for y in cys) / n
+    x_std = var_x ** 0.5
+    y_std = var_y ** 0.5
+    if x_std > y_std * 2:
+        return "horizontal"
+    if y_std > x_std * 2:
+        return "vertical"
+    if n >= 4 and x_std > 0 and y_std > 0:
+        return "grid"
+    return "scattered"
+
+
+def _cluster_bbox(indices: list[int], items: list[dict[str, Any]]) -> list[int]:
+    """计算组外接框。"""
+    xs: list[int] = []
+    ys: list[int] = []
+    for i in indices:
+        b = items[i].get("bbox", [0, 0, 0, 0])
+        xs.extend([b[0], b[2]])
+        ys.extend([b[1], b[3]])
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def compute_relations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """计算每个元素与其他元素的包含/相邻/对齐关系。
+
+    返回列表，与 items 一一对应。
+    - contains: 此元素包含的子元素索引列表
+    - contained_by: 被哪个元素包含（None 表示无父容器）
+    - adjacent: 紧邻元素索引（中心距 < 自身尺寸 × 0.6）
+    - aligned_row: 同行元素索引（y 中心差 < 自身高 × 0.5）
+    - aligned_col: 同列元素索引（x 中心差 < 自身宽 × 0.5）
+    """
+    n = len(items)
+    rels = [
+        {"contains": [], "contained_by": None, "adjacent": [], "aligned_row": [], "aligned_col": []}
+        for _ in range(n)
+    ]
+
+    bboxes = [item.get("bbox", [0, 0, 0, 0]) for item in items]
+
+    for i in range(n):
+        b = bboxes[i]
+        w = max(1, b[2] - b[0])
+        h = max(1, b[3] - b[1])
+        cx = (b[0] + b[2]) / 2.0
+        cy = (b[1] + b[3]) / 2.0
+        area = w * h
+
+        for j in range(n):
+            if i == j:
+                continue
+            bj = bboxes[j]
+            wj = max(1, bj[2] - bj[0])
+            hj = max(1, bj[3] - bj[1])
+            cxj = (bj[0] + bj[2]) / 2.0
+            cyj = (bj[1] + bj[3]) / 2.0
+            area_j = wj * hj
+
+            # 包含关系：A 包含 B（A 的 bbox 完全覆盖 B，且面积大 1.5 倍以上）
+            if (b[0] <= bj[0] and b[1] <= bj[1] and b[2] >= bj[2] and b[3] >= bj[3]
+                    and area > area_j * 1.5):
+                rels[i]["contains"].append(j)
+                rels[j]["contained_by"] = i
+
+            # 相邻：中心距 < 两元素较大尺寸 × 0.6
+            max_dim = max(w, wj, h, hj)
+            if ((cx - cxj) ** 2 + (cy - cyj) ** 2) ** 0.5 < max_dim * 0.6:
+                rels[i]["adjacent"].append(j)
+
+            # 同行：y 中心差 < 两元素较矮高 × 0.5
+            if abs(cy - cyj) < max(h, hj) * 0.5:
+                rels[i]["aligned_row"].append(j)
+
+            # 同列：x 中心差 < 两元素较窄宽 × 0.5
+            if abs(cx - cxj) < max(w, wj) * 0.5:
+                rels[i]["aligned_col"].append(j)
+
+    return rels
+
+
+def classify_text_pattern(text: str) -> str:
+    """基于文本模式（非内容）进行分类，语言无关。"""
+    if not text:
+        return "empty"
+    if re.match(r"^[\w.+-]+@[\w-]+\.\w{2,}$", text):
+        return "email_pattern"
+    if re.match(r"https?://", text):
+        return "url_pattern"
+    if re.match(r"^\+?\d[\d\s\-\(\)]{6,}$", text):
+        return "phone_pattern"
+    if re.match(r"^[\d\w._-]+$", text) and len(text) >= 6:
+        return "code_pattern"
+    if text.endswith(":") or text.endswith("："):
+        return "label_pattern"
+    if re.match(r"^[\d.,%$€£¥+\-*/=<>]+$", text):
+        return "numeric_pattern"
+    if len(text) <= 3:
+        return "short"
+    if len(text) > 50:
+        return "paragraph"
+    return "normal"
+
+
+def detect_layout(
+    items: list[dict[str, Any]],
+    img_w: int,
+    img_h: int,
+) -> dict[str, Any]:
+    """检测页面级通用结构模式，完全基于空间关系，语言无关。"""
+    n = len(items)
+    if n == 0:
+        return {"img_size": [img_w, img_h], "item_count": 0, "patterns": {}}
+
+    # 聚类
+    groups = _cluster_items(items)
+    cluster_summary: list[dict[str, Any]] = []
+    for cid, indices in enumerate(groups):
+        if not indices:
+            continue
+        c_bbox = _cluster_bbox(indices, items)
+        c_geom = compute_geometry(c_bbox, img_w, img_h)
+        cluster_summary.append({
+            "id": cid,
+            "size": len(indices),
+            "arrangement": _arrangement(indices, items),
+            "region": c_geom["region"],
+        })
+
+    # 检测页面模式
+    patterns: dict[str, bool] = {
+        "has_top_nav": any(
+            c["region"].startswith("top") and c["arrangement"] == "horizontal" and c["size"] >= 3
+            for c in cluster_summary),
+        "has_form": any(
+            c["region"].startswith("center") and c["arrangement"] == "vertical" and c["size"] >= 3
+            for c in cluster_summary),
+        "has_grid": any(
+            c["arrangement"] == "grid" and c["size"] >= 4
+            for c in cluster_summary),
+        "has_sidebar": any(
+            c["region"] in ("left", "top-left") and c["arrangement"] == "vertical" and c["size"] >= 3
+            for c in cluster_summary),
+        "has_footer": any(
+            c["region"].startswith("bottom") and c["arrangement"] == "horizontal" and c["size"] >= 2
+            for c in cluster_summary),
+    }
+
+    return {
+        "img_size": [img_w, img_h],
+        "item_count": n,
+        "patterns": patterns,
+        "cluster_summary": cluster_summary,
+    }
+
+
 def merge_web_results(
     image_path: str,
     ocr_items: list[dict[str, Any]],
     min_ui_confidence: float,
-) -> tuple[str, list[dict[str, Any]], str]:
-    """网页模式：OCR 全图 + YOLO UI 定位 + 合并。"""
+) -> tuple[str, list[dict[str, Any]], str, dict[str, Any] | None]:
+    """网页模式：OCR 全图 + YOLO UI 定位 + 合并 + 布局分析。"""
     log("Web 模式：OCR 全图识别 + YOLO UI 定位")
+
+    # 获取图片尺寸
+    with Image.open(image_path) as img:
+        img_w, img_h = img.size
 
     ui_items = run_yolo_detection(image_path)
     log(f"YOLO 检测到 {len(ui_items)} 个 UI 元素（阈值={BOX_THRESHOLD}）")
@@ -392,6 +659,37 @@ def merge_web_results(
 
     all_items.sort(key=sort_key)
 
+    # --- 布局分析：注入通用结构线索 ---
+    # 聚类
+    groups = _cluster_items(all_items)
+    # 每个 item 所属的 cluster
+    item_cluster: dict[int, int] = {}
+    for cid, indices in enumerate(groups):
+        for idx in indices:
+            item_cluster[idx] = cid
+    cluster_geoms: dict[int, dict[str, Any]] = {}
+    for cid, indices in enumerate(groups):
+        c_bbox = _cluster_bbox(indices, all_items)
+        cluster_geoms[cid] = compute_geometry(c_bbox, img_w, img_h)
+
+    # 为每个 item 注入线索
+    for idx, item in enumerate(all_items):
+        cid = item_cluster.get(idx)
+        item["geometry"] = compute_geometry(item.get("bbox", [0, 0, 0, 0]), img_w, img_h)
+        if cid is not None:
+            cg = cluster_geoms[cid]
+            item["cluster"] = {
+                "id": cid,
+                "size": len(groups[cid]),
+                "arrangement": _arrangement(groups[cid], all_items),
+                "region": cg["region"],
+            }
+        else:
+            item["cluster"] = {"id": -1, "size": 1, "arrangement": "single", "region": "unknown"}
+
+    # 页面级布局
+    layout = detect_layout(all_items, img_w, img_h)
+
     # 生成全文
     text_parts: list[str] = []
     for item in all_items:
@@ -402,7 +700,7 @@ def merge_web_results(
 
     text = "\n".join(text_parts)
     model_name = f"{YOLO_MODEL_DISPLAY} + {PPOCR_MODEL_DISPLAY}"
-    return text, all_items, model_name
+    return text, all_items, model_name, layout
 
 
 def run_inference(image_path: str, ocr_engine: str, web_mode: bool, min_ui_confidence: float) -> None:
@@ -420,19 +718,23 @@ def run_inference(image_path: str, ocr_engine: str, web_mode: bool, min_ui_confi
         sys.exit(1)
 
     if web_mode:
-        text, items, model_name = merge_web_results(image_path, ocr_items, min_ui_confidence)
+        text, items, _model_name, layout = merge_web_results(image_path, ocr_items, min_ui_confidence)
     else:
         items = ocr_items
-        model_name = PPOCR_MODEL_DISPLAY
+        layout = None
 
-    emit({
-        "ok": True,
+    # 移除对 AI 无意义的字段
+    for item in items:
+        item.pop("confidence", None)
+        item.pop("source", None)
+
+    payload: dict[str, Any] = {
         "text": text,
         "items": items,
-        "engine": "web" if web_mode else ocr_engine,
-        "ocr": ocr_engine,
-        "model": model_name,
-    })
+    }
+    if layout:
+        payload["layout"] = layout
+    emit(payload)
 
 
 # ---------------------------------------------------------------------------

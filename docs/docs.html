@@ -138,7 +138,7 @@
             <div class="opt-row"><code>&lt;image&gt;</code><span>图片文件路径（必填）。支持 png/jpg/jpeg/webp/bmp/tiff/tif，上限 20 MB</span><span class="dim">—</span></div>
             <div class="opt-row"><code>--ocr &lt;ppocrv6&gt;</code><span>OCR 引擎</span><span class="dim">ppocrv6</span></div>
             <div class="opt-row"><code>-w, --web</code><span>启用 YOLO UI 元素检测（网页/UI 场景）</span><span class="dim">关闭</span></div>
-            <div class="opt-row"><code>--json</code><span>输出适合 AI 读取的 JSON</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>--json</code><span>输出适合 AI 读取的 JSON（自动保存到工作区 files/ 目录并返回文件路径）</span><span class="dim">关闭</span></div>
             <div class="opt-row"><code>--timeout &lt;seconds&gt;</code><span>本次推理超时（秒），必须为正数</span><span class="dim">—</span></div>
             <div class="opt-row"><code>--min-confidence &lt;0~1&gt;</code><span>空 UI 元素保留阈值（仅 <code>--web</code>）。空文本且置信度低于该值的误检自动丢弃</span><span class="dim">0.55</span></div>
             <div class="opt-row"><code>-h, --help</code><span>显示 CLI 帮助</span><span class="dim">—</span></div>
@@ -222,20 +222,24 @@
             <div class="output-card success-card">
               <div class="output-header"><span>SUCCESS</span><b>EXIT 0</b></div>
               <pre><code>{
-  "ok": true,
   "text": "第一行\n第二行",
   "items": [
     {
       "text": "登录",
-      "confidence": 0.98,
       "bbox": [10,20,60,40],
-      "source": "yolo+ocr",
-      "type": "ui_text"
+      "type": "ui_text",
+      "geometry": {"aspect": 2.5, "region": "top-center"},
+      "cluster": {"id": 0, "size": 3, "arrangement": "vertical", "region": "center"}
     }
   ],
-  "engine": "web",
-  "ocr": "ppocrv6",
-  "model": "OmniParser V2 YOLO + PP-OCRv6"
+  "layout": {
+    "img_size": [1920, 1080],
+    "item_count": 10,
+    "patterns": {"has_top_nav": true, "has_form": true},
+    "cluster_summary": [
+      {"id": 0, "size": 3, "arrangement": "vertical", "region": "center"}
+    ]
+  }
 }</code></pre>
             </div>
             <div class="output-card error-card">
@@ -252,21 +256,18 @@
           <h3 class="sub-h">JSON 顶层字段</h3>
           <div class="opt-table">
             <div class="opt-row opt-head"><span>字段</span><span>类型</span><span>说明</span></div>
-            <div class="opt-row"><code>ok</code><span>boolean</span><span>是否成功</span></div>
             <div class="opt-row"><code>text</code><span>string</span><span>全文识别结果，各项用 \n 连接</span></div>
             <div class="opt-row"><code>items</code><span>array</span><span>识别项数组</span></div>
-            <div class="opt-row"><code>engine</code><span>string</span><span>web 或 ppocrv6</span></div>
-            <div class="opt-row"><code>ocr</code><span>string</span><span>OCR 引擎，当前为 ppocrv6</span></div>
-            <div class="opt-row"><code>model</code><span>string</span><span>实际使用的模型显示名</span></div>
+            <div class="opt-row"><code>layout</code><span>object</span><span>仅 Web 模式：页面级布局分析（聚类、页面模式、文字密度）</span></div>
           </div>
           <h3 class="sub-h">items[] 字段</h3>
           <div class="opt-table">
             <div class="opt-row opt-head"><span>字段</span><span>类型</span><span>说明</span></div>
             <div class="opt-row"><code>text</code><span>string</span><span>该项文字；Web 模式下为合并后的文字</span></div>
-            <div class="opt-row"><code>confidence</code><span>number</span><span>置信度（0~1）</span></div>
             <div class="opt-row"><code>bbox</code><span>array</span><span>轴对齐矩形 [x1,y1,x2,y2]</span></div>
-            <div class="opt-row"><code>source</code><span>string</span><span>ppocr / yolo / yolo+ocr</span></div>
             <div class="opt-row"><code>type</code><span>string</span><span>仅 Web 模式：ui_element / ui_text</span></div>
+            <div class="opt-row"><code>geometry</code><span>object</span><span>仅 Web 模式：几何特征（宽高比、九宫格区域）</span></div>
+            <div class="opt-row"><code>cluster</code><span>object</span><span>仅 Web 模式：所属空间聚类（组内元素数、排列方式、区域）</span></div>
           </div>
           <h3 class="sub-h">错误码</h3>
           <div class="opt-table">

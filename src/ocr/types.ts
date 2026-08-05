@@ -1,19 +1,39 @@
 import type { VisionOcrEngineType } from "./constants.js";
 
+export interface VisionGeometry {
+  aspect: number;
+  region: string;
+}
+
+export interface VisionCluster {
+  id: number;
+  size: number;
+  arrangement: string;
+  region: string;
+}
+
+export interface VisionLayout {
+  img_size: [number, number];
+  item_count: number;
+  text_density: string;
+  patterns: Record<string, boolean>;
+  cluster_summary: VisionCluster[];
+}
+
 export interface VisionItem {
   text: string;
   confidence?: number;
   bbox?: [number, number, number, number];
   source?: string;
   type?: string;
+  geometry?: VisionGeometry;
+  cluster?: VisionCluster;
 }
 
 export interface VisionRecognitionResult {
   text: string;
   items: VisionItem[];
-  engine: string;
-  ocr: string;
-  model: string;
+  layout?: VisionLayout;
 }
 
 export type VisionFeatureStatus =
@@ -51,6 +71,7 @@ export interface PythonOutput {
   ok: boolean;
   text?: string;
   items?: VisionItem[];
+  layout?: VisionLayout;
   engine?: string;
   ocr?: string;
   model?: string;
