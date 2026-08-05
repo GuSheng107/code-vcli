@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
 import { stdout, stderr } from "node:process";
@@ -217,6 +218,8 @@ export async function installVisionFeature(
 ): Promise<InstallResult> {
   if (await stateStore.isReady()) {
     const existing = await stateStore.read();
+    // 已安装：仅同步推理脚本和 requirements，确保源码更新能生效
+    await syncRuntimeScripts(configRoot);
     return {
       success: true,
       message: "视觉模型环境已安装",
@@ -522,5 +525,34 @@ async function verifyImports(venvPython: string): Promise<void> {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new VcliError("MODEL_INSTALL_FAILED", `Python 环境验证失败：${detail}`, 6, { cause: error });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 运行时脚本同步
+// ---------------------------------------------------------------------------
+async function fileSha256(filePath: string): Promise<string> {
+  const content = await readFile(filePath);
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * 已安装环境下，把包内的推理脚本和 requirements 同步到工作区。
+ * 通过 sha256 比较，仅在不一致时覆盖，避免无谓写入。
+ */
+async function syncRuntimeScripts(configRoot: string): Promise<void> {
+  const packageInfo = await getPackageInfo();
+  const resourcesDir = path.join(packageInfo.root, "resources", "ocr");
+  for (const fileName of [VISION_SCRIPT_FILE_NAME, VISION_REQUIREMENTS_FILE_NAME]) {
+    const src = path.join(resourcesDir, fileName);
+    const dst = path.join(configRoot, fileName);
+    try {
+      const [srcHash, dstHash] = await Promise.all([fileSha256(src), fileSha256(dst)]);
+      if (srcHash === dstHash) continue;
+      await cp(src, dst, { force: true });
+      stdout.write(`已同步 ${fileName} 到工作区\n`);
+    } catch {
+      // 目标不存在或读取失败：跳过，首次安装流程会处理
+    }
   }
 }

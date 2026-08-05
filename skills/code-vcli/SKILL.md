@@ -11,6 +11,7 @@ description: 使用 vcli CLI 对截图/图片执行本地视觉识别（OCR）�
 
 - 已执行过 `vcli init`（首次使用会下载模型，约 1-2 GB）。
 - 若返回 `MODEL_NOT_INSTALLED`，则需要先运行 `vcli init`。
+- 升级 code-vcli 后再次运行 `vcli init` 会自动同步最新推理脚本到工作区，无需重新下载模型。
 - 支持 Node.js 22+ 与 Python 3.10+。
 
 ## 安装与初始化

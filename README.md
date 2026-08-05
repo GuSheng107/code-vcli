@@ -69,6 +69,8 @@ vcli init --yes
 vcli init --yes --workspace "E:\code-vcli-data"
 ```
 
+> 升级 code-vcli 后，已安装的环境会通过 `vcli init` 自动同步最新推理脚本到工作区，无需重新下载模型。
+
 初始化会在工作区下自动创建 `files/` 文件夹，建议把待识别的截图统一放到这里方便管理。通过 `vcli info` 可查看当前工作区路径。
 
 ```text
