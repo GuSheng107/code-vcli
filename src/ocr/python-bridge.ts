@@ -6,7 +6,7 @@ import {
   VISION_SCRIPT_FILE_NAME,
   VISION_VENV_DIR_NAME,
 } from "./constants.js";
-import type { VisionEngineType } from "./constants.js";
+import type { VisionOcrEngineType } from "./constants.js";
 import { VcliError } from "../errors.js";
 import type { VisionStateStore } from "./feature-state.js";
 import type { VisionRecognitionResult, PythonOutput } from "./types.js";
@@ -78,7 +78,8 @@ export async function runModelSelfTest(
 export async function runVisionInference(
   stateStore: VisionStateStore,
   imagePath: string,
-  engine: VisionEngineType,
+  ocrEngine: VisionOcrEngineType,
+  webMode: boolean,
   options: PythonBridgeOptions = {},
 ): Promise<VisionRecognitionResult> {
   const ready = await stateStore.isReady();
@@ -108,10 +109,15 @@ export async function runVisionInference(
     );
   }
 
+  const args = ["--image", imagePath, "--ocr", ocrEngine];
+  if (webMode) {
+    args.push("--web");
+  }
+
   const output = await executePython(
     pythonPath,
     scriptPath,
-    ["--image", imagePath, "--engine", engine],
+    args,
     { ...options, env: { VCLI_CONFIG_ROOT: stateStore.directory } },
   );
 
@@ -129,7 +135,8 @@ export async function runVisionInference(
   return {
     text: output.text ?? items.map((item) => item.text).join("\n"),
     items,
-    engine: output.engine ?? engine,
+    engine: output.engine ?? (webMode ? "web" : ocrEngine),
+    ocr: output.ocr ?? ocrEngine,
     model: output.model ?? "",
   };
 }

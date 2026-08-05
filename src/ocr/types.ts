@@ -1,16 +1,18 @@
-import type { VisionEngineType } from "./constants.js";
+import type { VisionOcrEngineType } from "./constants.js";
 
 export interface VisionItem {
   text: string;
   confidence?: number;
   box?: Array<[number, number]>;
   source?: string;
+  type?: string;
 }
 
 export interface VisionRecognitionResult {
   text: string;
   items: VisionItem[];
   engine: string;
+  ocr: string;
   model: string;
 }
 
@@ -50,6 +52,7 @@ export interface PythonOutput {
   text?: string;
   items?: VisionItem[];
   engine?: string;
+  ocr?: string;
   model?: string;
   error?: {
     code: string;
@@ -57,4 +60,4 @@ export interface PythonOutput {
   };
 }
 
-export type VisionEngine = VisionEngineType;
+export type VisionOcrEngine = VisionOcrEngineType;

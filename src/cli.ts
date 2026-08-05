@@ -21,15 +21,15 @@ import { VisionStateStore } from "./ocr/feature-state.js";
 import { installVisionFeature, checkPythonAvailable } from "./ocr/feature-installer.js";
 import { runVisionInference } from "./ocr/python-bridge.js";
 import {
-  GLM_OCR_MODEL_DISPLAY,
+  PPOCR_MODEL_DISPLAY,
   OMNIPARSER_MODEL_DISPLAY,
-  VISION_ENGINES,
+  VISION_OCR_ENGINES,
   VISION_DOWNLOAD_SIZE_ESTIMATE,
   VISION_SUPPORTED_EXTENSIONS,
   IMAGE_MAX_BYTES,
   PYTHON_MIN_VERSION,
 } from "./ocr/constants.js";
-import type { VisionEngineType } from "./ocr/constants.js";
+import type { VisionOcrEngineType } from "./ocr/constants.js";
 
 const DISCLAIMER = "vcli — VisionCLI 截图转文本工具";
 
@@ -41,7 +41,7 @@ Usage:
 Commands:
   vcli                       打开交互界面
   init [--yes] [--workspace <path>] [--reset-workspace]  初始化视觉模型环境
-  run <image> [--engine]     对图片执行视觉识别
+  run <image> [options]      对图片执行视觉识别
   info                       显示 vcli 与系统环境信息
   update                     从 npm Registry 更新到最新版
   install [--force]          安装到用户目录并加入 PATH
@@ -50,20 +50,23 @@ Commands:
 
 Init Options:
   --yes                      跳过所有交互确认，使用默认值
-  --workspace <path>         指定工作区路径（存放 venv + 模型，约 3-5 GB）
+  --workspace <path>         指定工作区路径（存放 venv + 模型，约 1-2 GB）
   --reset-workspace          重新选择工作区路径
 
 Run Options:
   <image>                    图片文件路径（必填）
-  -e, --engine <glm|omni|auto>  推理引擎（默认 auto）
+      --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
+  -w, --web                  启用 YOLO UI 元素检测（网页/UI 场景）
       --json                 输出适合 AI 读取的 JSON
       --timeout <seconds>    本次推理超时
   -h, --help                 显示帮助
 
-Engines:
-  glm    ${GLM_OCR_MODEL_DISPLAY}（文档/表格/公式/聊天记录识别）
-  omni   ${OMNIPARSER_MODEL_DISPLAY}（网页/UI 元素检测与定位）
-  auto   ${GLM_OCR_MODEL_DISPLAY} + ${OMNIPARSER_MODEL_DISPLAY}（合并结果，默认）
+OCR Engine:
+  ppocrv6   ${PPOCR_MODEL_DISPLAY}（工业级，速度快，带坐标）
+
+Web Mode:
+  启用 OmniParser YOLO 检测 UI 元素位置，与 OCR 文字合并输出。
+  仅在网页/UI 截图场景使用，普通文档截图无需启用。
 
 Init:
   需要 Python ${PYTHON_MIN_VERSION}+ 环境
@@ -75,8 +78,9 @@ Examples:
   vcli init
   vcli init --yes
   vcli run ./screenshot.png
-  vcli run ./screenshot.png --engine glm --json
-  vcli run ./ui.png --engine omni
+  vcli run ./screenshot.png --json
+  vcli run ./webpage.png --web
+  vcli run ./webpage.png --web --json
   vcli info
   vcli update
   vcli help
@@ -84,41 +88,36 @@ Examples:
 
 interface RunArguments {
   image?: string;
-  engine?: VisionEngineType;
+  ocr?: VisionOcrEngineType;
+  web: boolean;
   json: boolean;
   timeoutMs?: number;
 }
 
-function requireOptionValue(args: string[], index: number, option: string): string {
-  const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new VcliError("INVALID_ARGUMENT", `${option} 缺少参数值`, 2);
-  }
-  return value;
-}
-
-function isVisionEngine(value: string): value is VisionEngineType {
-  return (VISION_ENGINES as readonly string[]).includes(value);
+function isVisionOcrEngine(value: string): value is VisionOcrEngineType {
+  return (VISION_OCR_ENGINES as readonly string[]).includes(value);
 }
 
 function parseRunArguments(args: string[]): RunArguments {
-  const parsed: RunArguments = { json: false };
+  const parsed: RunArguments = { web: false, json: false };
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
       parsed.json = true;
-    } else if (arg === "-e" || arg === "--engine") {
+    } else if (arg === "--ocr") {
       const value = requireOptionValue(args, index, arg);
-      if (!isVisionEngine(value)) {
+      if (!isVisionOcrEngine(value)) {
         throw new VcliError(
           "INVALID_ARGUMENT",
-          `--engine 仅支持：${VISION_ENGINES.join(", ")}`,
+          `--ocr 仅支持：${VISION_OCR_ENGINES.join(", ")}`,
           2,
         );
       }
-      parsed.engine = value;
+      parsed.ocr = value;
       index += 1;
+    } else if (arg === "-w" || arg === "--web") {
+      parsed.web = true;
     } else if (arg === "--timeout") {
       const seconds = Number(requireOptionValue(args, index, arg));
       index += 1;
@@ -139,6 +138,14 @@ function parseRunArguments(args: string[]): RunArguments {
     }
   }
   return parsed;
+}
+
+function requireOptionValue(args: string[], index: number, option: string): string {
+  const value = args[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new VcliError("INVALID_ARGUMENT", `${option} 缺少参数值`, 2);
+  }
+  return value;
 }
 
 async function validateImageFile(imagePath: string): Promise<void> {
@@ -176,7 +183,7 @@ async function validateImageFile(imagePath: string): Promise<void> {
 async function promptWorkspaceSelection(configStore: ConfigStore): Promise<string> {
   const defaultWorkspace = await configStore.getWorkspace();
   const prompt = [
-    "选择 vcli 工作区路径（用于存放 venv 和模型权重，约 3-5 GB）",
+    "选择 vcli 工作区路径（用于存放 venv 和模型权重，约 1-2 GB）",
     "",
     `默认路径：${defaultWorkspace}`,
     "如需使用其他盘符，请输入完整路径，例如：E:\\vcli-data",
@@ -250,10 +257,12 @@ async function runRunCommand(
   const imagePath = path.resolve(parsed.image);
   await validateImageFile(imagePath);
 
-  const engine = parsed.engine ?? "auto";
-  stderr.write(`正在识别…（引擎：${engine}）\n`);
+  const ocrEngine = parsed.ocr ?? "ppocrv6";
+  const webMode = parsed.web;
+  const modeDesc = webMode ? `web + ${ocrEngine}` : ocrEngine;
+  stderr.write(`正在识别…（模式：${modeDesc}）\n`);
 
-  const result = await runVisionInference(stateStore, imagePath, engine, {
+  const result = await runVisionInference(stateStore, imagePath, ocrEngine, webMode, {
     ...(parsed.timeoutMs ? { timeoutMs: parsed.timeoutMs } : {}),
   });
 
@@ -263,6 +272,7 @@ async function runRunCommand(
       text: result.text,
       items: result.items,
       engine: result.engine,
+      ocr: result.ocr,
       model: result.model,
     }, null, 2)}\n`);
   } else {
@@ -311,11 +321,13 @@ async function runInfoCommand(
     `模型目录：${path.join(configStatus.workspace, "models")}`,
     `venv 目录：${path.join(configStatus.workspace, "venv")}`,
     "",
-    "支持引擎",
+    "OCR 引擎",
     "----------",
-    `glm   — ${GLM_OCR_MODEL_DISPLAY}（文档/表格/公式）`,
-    `omni  — ${OMNIPARSER_MODEL_DISPLAY}（UI 元素检测）`,
-    `auto  — ${GLM_OCR_MODEL_DISPLAY} + ${OMNIPARSER_MODEL_DISPLAY}`,
+    `ppocrv6   — ${PPOCR_MODEL_DISPLAY}（工业级，速度快，带坐标）`,
+    "",
+    "Web 模式",
+    "----------",
+    `${OMNIPARSER_MODEL_DISPLAY}（网页/UI 元素检测，--web 启用）`,
     "",
     `下载大小（首次 init）：${VISION_DOWNLOAD_SIZE_ESTIMATE}`,
   ];
@@ -398,13 +410,15 @@ async function runInteractive(configStore: ConfigStore): Promise<void> {
           stderr.write("视觉模型尚未安装，请先运行 init。\n");
         } else {
           renderInteractivePage(packageInfo.version, initialized, items, "识别图片");
-          const imagePath = await promptText("图片路径：");
-          const engineInput = (await promptText("引擎 [glm/omni/auto]（回车默认 auto）：")).trim() || "auto";
-          if (!isVisionEngine(engineInput)) {
-            stderr.write(`未知引擎：${engineInput}\n`);
-          } else {
-            await runRunCommand(stateStore, [imagePath, "--engine", engineInput]);
-          }
+          const imagePath = (await promptText("图片路径：")).trim();
+          if (!imagePath) continue;
+
+          const webInput = (await promptText("网页/UI 场景？ [y/n]（回车默认 n）：")).trim().toLowerCase();
+          const webMode = webInput === "y" || webInput === "yes";
+
+          const runArgs = [imagePath, "--ocr", "ppocrv6"];
+          if (webMode) runArgs.push("--web");
+          await runRunCommand(stateStore, runArgs);
         }
       } else if (action === "info") {
         renderInteractivePage(packageInfo.version, initialized, items, "环境信息");

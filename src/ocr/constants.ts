@@ -9,21 +9,18 @@ export const VISION_FILES_DIR_NAME = "files";
 
 export const PYTHON_MIN_VERSION = "3.10";
 
-export const GLM_OCR_REPO = "zai-org/GLM-OCR";
-export const GLM_OCR_MODEL_DISPLAY = "GLM-OCR 0.9B";
-export const GLM_OCR_MODEL_ID = "glm-ocr-0.9b";
-
 export const OMNIPARSER_REPO = "microsoft/OmniParser-v2.0";
-export const OMNIPARSER_MODEL_DISPLAY = "OmniParser V2";
-export const OMNIPARSER_MODEL_ID = "omniparser-v2";
+export const OMNIPARSER_MODEL_DISPLAY = "OmniParser V2 YOLO";
+export const OMNIPARSER_MODEL_ID = "omniparser-v2-yolo";
 
-export const FLORENCE_CAPTION_REPO = "microsoft/Florence-2-base-ft";
-export const FLORENCE_PROCESSOR_REPO = "microsoft/Florence-2-base";
+export const PPOCR_MODEL_DISPLAY = "PP-OCRv6 (RapidOCR + OpenVINO)";
+export const PPOCR_MODEL_ID = "ppocrv6";
 
-export const VISION_ENGINES = ["glm", "omni", "auto"] as const;
-export type VisionEngineType = typeof VISION_ENGINES[number];
+// OCR 引擎类型（可插拔；当前仅支持 ppocrv6）
+export const VISION_OCR_ENGINES = ["ppocrv6"] as const;
+export type VisionOcrEngineType = typeof VISION_OCR_ENGINES[number];
 
-export const VISION_DOWNLOAD_SIZE_ESTIMATE = "约 3-5 GB（含 torch + 模型权重）";
+export const VISION_DOWNLOAD_SIZE_ESTIMATE = "约 1-2 GB（含 torch + 模型权重）";
 
 export const VISION_SUPPORTED_EXTENSIONS = [
   ".png",
@@ -38,18 +35,18 @@ export const VISION_SUPPORTED_EXTENSIONS = [
 export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
-// 锁定版本 — 两个引擎共用同一套依赖
+// Torch 版本 — 锁定已知稳定版本
+// 2.13.0 在 Windows + Python 3.13 上有 c10.dll 加载失败问题，锁定 2.7.1
 // ---------------------------------------------------------------------------
-export const TORCH_VERSION = "2.5.1";
-export const TORCHVISION_VERSION = "0.20.1";
-export const TRANSFORMERS_VERSION = "5.3.0";
+export const TORCH_VERSION = "2.7.1";
+export const TORCHVISION_VERSION = "0.22.1";
 
 // ---------------------------------------------------------------------------
 // Torch 安装源 — 根据 CPU/GPU 模式和平台选择
 // ---------------------------------------------------------------------------
 export const TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu";
-export const TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121";
-export const TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.1";
+export const TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu126";
+export const TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.2";
 
 export type ComputeMode = "cpu" | "gpu";
 export type GpuVendor = "nvidia" | "amd" | "apple" | "none";

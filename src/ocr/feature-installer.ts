@@ -12,15 +12,14 @@ import {
   VISION_STAGING_DIR_NAME,
   VISION_VENV_DIR_NAME,
   VISION_FILES_DIR_NAME,
-  GLM_OCR_MODEL_DISPLAY,
   OMNIPARSER_MODEL_DISPLAY,
+  PPOCR_MODEL_DISPLAY,
   VISION_DOWNLOAD_SIZE_ESTIMATE,
   TORCH_CPU_INDEX,
   TORCH_CUDA_INDEX,
   TORCH_ROCM_INDEX,
   TORCH_VERSION,
   TORCHVISION_VERSION,
-  TRANSFORMERS_VERSION,
   type ComputeMode,
   type GpuVendor,
   type PlatformInfo,
@@ -135,7 +134,7 @@ export function checkComputeCompatibility(
           mode: "gpu",
           gpuVendor: "nvidia",
           torchIndex: TORCH_CUDA_INDEX,
-          description: "NVIDIA GPU (CUDA 12.1)",
+          description: "NVIDIA GPU (CUDA 12.6)",
         },
       };
     }
@@ -165,7 +164,7 @@ export function checkComputeCompatibility(
           mode: "gpu",
           gpuVendor: "amd",
           torchIndex: TORCH_ROCM_INDEX,
-          description: "AMD GPU (ROCm 6.1)",
+          description: "AMD GPU (ROCm 6.2)",
         },
       };
     }
@@ -267,7 +266,7 @@ export async function installVisionFeature(
     const promptText = [
       "即将初始化 vcli 视觉模型环境。",
       "",
-      `模型：${GLM_OCR_MODEL_DISPLAY} + ${OMNIPARSER_MODEL_DISPLAY}`,
+      `模型：${PPOCR_MODEL_DISPLAY} + ${OMNIPARSER_MODEL_DISPLAY}`,
       "方式：本地离线推理，图片不会上传",
       `下载大小：${VISION_DOWNLOAD_SIZE_ESTIMATE}`,
       `工作区：${configRoot}`,
@@ -308,7 +307,7 @@ export async function installVisionFeature(
     stdout.write(`安装 PyTorch（${computeOption.description}）…\n`);
     await installTorch(venvPython, computeOption);
 
-    // 8. 安装 Python 依赖（transformers/easyocr/ultralytics 等）
+    // 8. 安装 Python 依赖（ultralytics/rapidocr 等）
     const requirementsSrc = path.join(resourcesDir, VISION_REQUIREMENTS_FILE_NAME);
     const requirementsDst = path.join(stagingDir, VISION_REQUIREMENTS_FILE_NAME);
     await cp(requirementsSrc, requirementsDst, { force: true });
@@ -510,11 +509,8 @@ async function installTorch(venvPython: string, option: ComputeOption): Promise<
 
 async function verifyImports(venvPython: string): Promise<void> {
   const checkScript = [
-    "import torch, torchvision, transformers",
-    `assert torch.__version__.startswith("${TORCH_VERSION}"), f"torch 版本不符: {torch.__version__}"`,
-    `assert torchvision.__version__.startswith("${TORCHVISION_VERSION}"), f"torchvision 版本不符: {torchvision.__version__}"`,
-    `assert transformers.__version__ == "${TRANSFORMERS_VERSION}", f"transformers 版本不符: {transformers.__version__}"`,
-    "print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, transformers={transformers.__version__}, cuda={torch.cuda.is_available()}, mps={getattr(torch.backends,\"mps\",None) and torch.backends.mps.is_available() if hasattr(torch.backends,\"mps\") else False}')",
+    "import torch, torchvision, ultralytics, rapidocr",
+    "print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, cuda={torch.cuda.is_available()}, mps={getattr(torch.backends,\"mps\",None) and torch.backends.mps.is_available() if hasattr(torch.backends,\"mps\") else False}')",
   ].join("; ");
   try {
     const { stdout: out, stderr: err } = await execFileAsync(

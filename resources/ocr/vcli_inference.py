@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""vcli 视觉推理脚本 — GLM-OCR / OmniParser V2 / Auto
+"""vcli 视觉推理脚本 — PP-OCRv6 + OmniParser YOLO
 
-由 Node.js CLI 通过 spawn() 调用，所有进度信息输出到 stderr，
-识别结果以 JSON 形式输出到 stdout。
+设计：
+- 默认模式：PP-OCRv6 整图识别，速度快、带坐标
+- --web 模式：额外跑 YOLO 检测 UI 元素位置，与 OCR 文字合并输出
+  适用于网页/UI 截图场景，普通文档无需启用
 
 命令：
-  --init                下载全部模型到 ~/.vcli/models/
-  --self-test           验证模型可加载，输出 {"ok": true/false}
-  --image <path> --engine <glm|omni|auto>   对图片执行推理
+  --init                          下载全部模型
+  --self-test                     验证模型可加载
+  --image <path>                  对图片执行推理
+  --ocr <ppocrv6>                 OCR 引擎（当前仅支持 ppocrv6）
+  --web                           启用 YOLO UI 元素检测（网页/UI 场景）
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -29,7 +34,12 @@ if hasattr(sys.stderr, "reconfigure"):
 # 常量
 # ---------------------------------------------------------------------------
 def _resolve_models_dir() -> Path:
-    """模型目录：优先使用 VCLI_CONFIG_ROOT 环境变量，回退到 ~/.vcli/。"""
+    """模型目录：优先使用 VCLI_CONFIG_ROOT 环境变量。
+
+    回退顺序：
+    1. ~/.vcli-data/models（Windows 上常见的工作区）
+    2. ~/.vcli/models（默认位置）
+    """
     config_root = os.environ.get("VCLI_CONFIG_ROOT")
     if config_root:
         return Path(config_root) / "models"
@@ -38,38 +48,36 @@ def _resolve_models_dir() -> Path:
 
 MODELS_DIR = _resolve_models_dir()
 
-GLM_OCR_REPO = "zai-org/GLM-OCR"
 OMNIPARSER_REPO = "microsoft/OmniParser-v2.0"
-FLORENCE_CAPTION_REPO = "microsoft/Florence-2-base-ft"
-FLORENCE_PROCESSOR_REPO = "microsoft/Florence-2-base"
-
 HF_MIRROR = "https://hf-mirror.com"
 
-GLM_OCR_DIR = MODELS_DIR / "glm-ocr"
 OMNIPARSER_DIR = MODELS_DIR / "omniparser"
 ICON_DETECT_DIR = OMNIPARSER_DIR / "icon_detect"
-ICON_CAPTION_DIR = OMNIPARSER_DIR / "icon_caption"
-ICON_PROCESSOR_DIR = OMNIPARSER_DIR / "icon_processor"
-EASYOCR_DIR = MODELS_DIR / "easyocr"
+PPOCR_DIR = MODELS_DIR / "ppocr"
 
-GLM_OCR_MODEL_DISPLAY = "GLM-OCR 0.9B"
-OMNIPARSER_MODEL_DISPLAY = "OmniParser V2"
-AUTO_MODEL_DISPLAY = f"{GLM_OCR_MODEL_DISPLAY} + {OMNIPARSER_MODEL_DISPLAY}"
+PPOCR_MODEL_DISPLAY = "PP-OCRv6 (RapidOCR + OpenVINO)"
+YOLO_MODEL_DISPLAY = "OmniParser V2 YOLO"
 
-OCR_PROMPT = "请识别并输出图片中的所有文字内容，保留原始排版。"
-CAPTION_PROMPT = "<CAPTION>"
+# YOLO 置信度阈值
+BOX_THRESHOLD = 0.25
+# OCR 文字框与 YOLO UI 框的 IoU 阈值，超过则认为文字属于该 UI 元素
+IOU_MATCH_THRESHOLD = 0.3
+# 文字框与 UI 框中心点距离阈值（像素），用于辅助匹配
+CENTER_DIST_THRESHOLD = 50
+# 面积比阈值：OCR 框面积 / UI 框面积 > 该值时不合并，避免大段落被误吞
+MAX_AREA_RATIO = 2.5
+# UI 元素最小面积（像素），过小的图标不吞文字
+MIN_UI_AREA = 500
 
 
 # ---------------------------------------------------------------------------
 # 输出辅助
 # ---------------------------------------------------------------------------
 def log(message: str) -> None:
-    """进度信息输出到 stderr（Node.js 仅捕获 stdout）。"""
     print(message, file=sys.stderr, flush=True)
 
 
 def emit(payload: dict[str, Any]) -> None:
-    """以 JSON 形式输出到 stdout。"""
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
@@ -78,7 +86,7 @@ def emit_error(code: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 设备
+# 设备 / 下载 / 校验
 # ---------------------------------------------------------------------------
 def get_device() -> str:
     try:
@@ -88,652 +96,304 @@ def get_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def get_dtype():
-    import torch  # type: ignore[import-untyped]
-    return torch.float16 if torch.cuda.is_available() else torch.float32
-
-
-# ---------------------------------------------------------------------------
-# 模型下载
-# ---------------------------------------------------------------------------
 def download_snapshot(repo_id: str, local_dir: Path, allow_patterns: list[str] | None = None) -> str:
-    """使用 huggingface_hub 下载快照，先尝试 huggingface.co，失败回退 hf-mirror.com。"""
     from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
 
     local_dir.mkdir(parents=True, exist_ok=True)
     log(f"下载 {repo_id} -> {local_dir}（huggingface.co）")
     try:
-        return snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(local_dir),
-            allow_patterns=allow_patterns,
-        )
+        return snapshot_download(repo_id=repo_id, local_dir=str(local_dir), allow_patterns=allow_patterns)
     except Exception as exc:
         log(f"huggingface.co 下载失败：{exc}")
         log(f"切换镜像：{HF_MIRROR}")
         os.environ["HF_ENDPOINT"] = HF_MIRROR
-        return snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(local_dir),
-            allow_patterns=allow_patterns,
-        )
+        return snapshot_download(repo_id=repo_id, local_dir=str(local_dir), allow_patterns=allow_patterns)
 
 
-def init_easyocr_models() -> None:
-    """预下载 EasyOCR 自带模型到工作区（失败不视为致命错误，使用时会再次尝试）。"""
+def init_ppocr_models() -> None:
     try:
-        log("初始化 EasyOCR（下载其自带模型）…")
-        import easyocr  # type: ignore[import-untyped]
-        EASYOCR_DIR.mkdir(parents=True, exist_ok=True)
-        easyocr.Reader(
-            ["ch_sim", "en"],
-            gpu=False,
-            model_storage_directory=str(EASYOCR_DIR),
-        )
-        log("EasyOCR 模型就绪")
+        from rapidocr import RapidOCR  # type: ignore[import-untyped]
+        from rapidocr.utils.typings import EngineType  # type: ignore[import-untyped]
+        log("初始化 PP-OCRv6（下载其模型）…")
+        PPOCR_DIR.mkdir(parents=True, exist_ok=True)
+        engine = EngineType.OPENVINO
+        RapidOCR(params={"Global.model_root_dir": str(PPOCR_DIR),
+                         "Det.engine_type": engine,
+                         "Cls.engine_type": engine,
+                         "Rec.engine_type": engine})
+        log("PP-OCRv6 模型就绪")
     except Exception as exc:
-        log(f"EasyOCR 预下载失败（将在使用时重试）：{exc}")
-
-
-def _clean_florence2_custom_code(directory: Path) -> None:
-    """已废弃：保留旧版 .py 文件用于 Strategy B 兼容层加载。
-
-    保留 configuration_florence2.py / modeling_florence2.py / processing_florence2.py，
-    运行时通过 get_class_from_dynamic_module 加载，配合 transformers 5.3 使用。
-    此函数仅保留签名以兼容旧调用点，实际不做任何操作。
-    """
-    return None
-
-
-# ---------------------------------------------------------------------------
-# 模型完整性校验
-# ---------------------------------------------------------------------------
-def _check_file(path: Path) -> bool:
-    """检查文件存在且大小 > 0。"""
-    try:
-        return path.is_file() and path.stat().st_size > 0
-    except OSError:
-        return False
-
-
-def _check_dir_has_files(path: Path, suffix: str | None = None, min_count: int = 1) -> bool:
-    """检查目录存在且至少有 min_count 个文件（可按后缀过滤）。"""
-    try:
-        if not path.is_dir():
-            return False
-        files = list(path.iterdir())
-        if suffix is not None:
-            files = [f for f in files if f.suffix == suffix]
-        return len(files) >= min_count
-    except OSError:
-        return False
-
-
-def verify_model_integrity() -> list[str]:
-    """校验全部模型文件完整性，返回缺失/空文件列表（空列表表示全部通过）。"""
-    missing: list[str] = []
-
-    # GLM-OCR
-    if not _check_file(GLM_OCR_DIR / "config.json"):
-        missing.append("glm-ocr/config.json")
-    if not _check_dir_has_files(GLM_OCR_DIR, ".safetensors", 1):
-        missing.append("glm-ocr/*.safetensors")
-    if not _check_file(GLM_OCR_DIR / "preprocessor_config.json"):
-        missing.append("glm-ocr/preprocessor_config.json")
-    if not (_check_file(GLM_OCR_DIR / "tokenizer.json") or
-            _check_file(GLM_OCR_DIR / "tokenizer_config.json")):
-        missing.append("glm-ocr/tokenizer.json 或 tokenizer_config.json")
-
-    # OmniParser — YOLO
-    if not _check_file(ICON_DETECT_DIR / "model.pt"):
-        missing.append("omniparser/icon_detect/model.pt")
-
-    # OmniParser — Florence-2 caption (权重 + 配置 + 旧模型代码)
-    if not _check_file(ICON_CAPTION_DIR / "config.json"):
-        missing.append("omniparser/icon_caption/config.json")
-    if not _check_dir_has_files(ICON_CAPTION_DIR, ".safetensors", 1):
-        missing.append("omniparser/icon_caption/*.safetensors")
-    for py_file in ("configuration_florence2.py", "modeling_florence2.py"):
-        if not _check_file(ICON_CAPTION_DIR / py_file):
-            missing.append(f"omniparser/icon_caption/{py_file}")
-
-    # OmniParser — Florence-2 processor (tokenizer + 图像预处理 + processing 代码)
-    if not _check_file(ICON_PROCESSOR_DIR / "config.json"):
-        missing.append("omniparser/icon_processor/config.json")
-    if not _check_file(ICON_PROCESSOR_DIR / "tokenizer.json"):
-        missing.append("omniparser/icon_processor/tokenizer.json")
-    if not _check_file(ICON_PROCESSOR_DIR / "preprocessor_config.json"):
-        missing.append("omniparser/icon_processor/preprocessor_config.json")
-    if not _check_file(ICON_PROCESSOR_DIR / "processing_florence2.py"):
-        missing.append("omniparser/icon_processor/processing_florence2.py")
-
-    # EasyOCR — 检测模型 + 至少一个识别模型
-    if not _check_file(EASYOCR_DIR / "craft_mlt_25k.pth"):
-        missing.append("easyocr/craft_mlt_25k.pth")
-    if not _check_dir_has_files(EASYOCR_DIR, ".pth", 2):
-        missing.append("easyocr/*.pth (需要检测模型 + 至少一个识别模型)")
-
-    return missing
-
-
-def ensure_models_ready() -> None:
-    """推理/自检前调用，文件不完整直接报错。"""
-    missing = verify_model_integrity()
-    if missing:
-        log("模型文件不完整，缺失：")
-        for item in missing:
-            log(f"  - {item}")
-        emit_error(
-            "MODEL_INITIALIZATION_FAILED",
-            f"模型文件不完整，缺失 {len(missing)} 项。请重新运行 vcli init。",
-        )
-        sys.exit(1)
+        log(f"PP-OCRv6 预下载失败（将在使用时重试）：{exc}")
 
 
 def download_all_models() -> None:
-    """下载全部模型组件到 ~/.vcli/models/。"""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
-    log("== 开始下载 GLM-OCR ==")
-    download_snapshot(GLM_OCR_REPO, GLM_OCR_DIR)
-
-    log("== 开始下载 OmniParser 组件 ==")
-    # icon_detect：仅下载 icon_detect/model.pt
-    download_snapshot(
-        OMNIPARSER_REPO,
-        OMNIPARSER_DIR,
-        allow_patterns=["icon_detect/model.pt"],
-    )
-    # icon_caption：Florence-2-base-ft
-    download_snapshot(FLORENCE_CAPTION_REPO, ICON_CAPTION_DIR)
-    _clean_florence2_custom_code(ICON_CAPTION_DIR)
-    # icon_processor：Florence-2-base（processor/tokenizer）
-    download_snapshot(FLORENCE_PROCESSOR_REPO, ICON_PROCESSOR_DIR)
-    _clean_florence2_custom_code(ICON_PROCESSOR_DIR)
-
-    init_easyocr_models()
-
-    # 下载后校验完整性
+    log("== 开始下载 OmniParser YOLO ==")
+    download_snapshot(OMNIPARSER_REPO, OMNIPARSER_DIR, allow_patterns=["icon_detect/model.pt"])
+    log("== 开始下载 PP-OCRv6 ==")
+    init_ppocr_models()
     missing = verify_model_integrity()
     if missing:
         log("警告：下载完成后部分文件仍缺失：")
         for item in missing:
             log(f"  - {item}")
         raise RuntimeError(f"模型下载不完整，缺失 {len(missing)} 项")
-
     log("== 全部模型下载完成 ==")
 
 
-# ---------------------------------------------------------------------------
-# GLM-OCR 引擎
-# ---------------------------------------------------------------------------
-def load_glm_ocr() -> tuple[Any, Any]:
-    """加载 GLM-OCR 模型与 processor。
-
-    GLM-OCR 属于 ImageTextToText 架构，官方推荐用 AutoModelForImageTextToText
-    加载；AutoModel 会落到 GlmOcrModel，缺少 generate 方法。
-    """
-    from transformers import AutoModelForImageTextToText, AutoProcessor  # type: ignore[import-untyped]
-    import torch  # type: ignore[import-untyped]
-
-    device = get_device()
-    dtype = get_dtype()
-    kwargs: dict[str, Any] = {"trust_remote_code": True, "torch_dtype": dtype}
-    if device == "cuda":
-        kwargs["device_map"] = "auto"
-
-    log(f"加载 GLM-OCR（device={device}, dtype={dtype}）…")
-    model = AutoModelForImageTextToText.from_pretrained(str(GLM_OCR_DIR), **kwargs)
-    if device != "cuda":
-        model = model.to(device)
-    model.eval()
-    processor = AutoProcessor.from_pretrained(str(GLM_OCR_DIR), trust_remote_code=True)
-    return model, processor
-
-
-def run_glm_ocr(model: Any, processor: Any, image_path: str) -> tuple[str, list[dict[str, Any]]]:
-    """使用 GLM-OCR 执行推理，返回 (全文, items)。"""
-    import torch  # type: ignore[import-untyped]
-
-    # GLM-OCR 官方格式：content 使用 url 字段传入图片路径
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "url": image_path},
-                {"type": "text", "text": "Text Recognition:"},
-            ],
-        }
-    ]
-
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    ).to(model.device)
-
-    # GLM-OCR 要求移除 token_type_ids
-    inputs.pop("token_type_ids", None)
-
-    with torch.inference_mode():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=4096,
-            do_sample=False,
-        )
-
-    input_len = inputs["input_ids"].shape[1]
-    generated_ids = output_ids[0][input_len:]
-    recognized = processor.decode(generated_ids, skip_special_tokens=True).strip()
-
-    if recognized:
-        return recognized, [{"text": recognized, "confidence": 1.0}]
-    return "", []
-
-
-# ---------------------------------------------------------------------------
-# OmniParser V2 引擎
-# ---------------------------------------------------------------------------
-
-# transformers 5.3 将 tied weights 从列表改成目标到源的映射。
-LANGUAGE_MODEL_TIED_WEIGHTS = {
-    "encoder.embed_tokens.weight": "shared.weight",
-    "decoder.embed_tokens.weight": "shared.weight",
-}
-LANGUAGE_GENERATION_TIED_WEIGHTS = {
-    "lm_head.weight": "model.shared.weight",
-}
-FLORENCE_TIED_WEIGHTS = {
-    "language_model.lm_head.weight": "language_model.model.shared.weight",
-}
-FLORENCE_TOKENIZER_SPECIAL_TOKENS = {
-    "bos_token": "<s>",
-    "eos_token": "</s>",
-    "unk_token": "<unk>",
-    "sep_token": "</s>",
-    "pad_token": "<pad>",
-    "cls_token": "<s>",
-    "mask_token": "<mask>",
-}
-
-
-def _load_florence_model(caption_path: str, device: str, dtype: Any) -> Any:
-    """用 transformers 5.3 加载 OmniParser 的旧 Florence-2 权重（Strategy B）。
-
-    保留旧 Florence-2 的 configuration/modeling .py 文件，通过
-    get_class_from_dynamic_module 加载，仅修正 transformers 5.3 变化的元数据，
-    不修改模型结构和权重内容。
-    """
-    from safetensors.torch import load_model  # type: ignore[import-untyped]
-    from transformers import GenerationMixin, PretrainedConfig  # type: ignore[import-untyped]
-    from transformers.dynamic_module_utils import get_class_from_dynamic_module  # type: ignore[import-untyped]
-
-    # 旧 Florence 配置在构造阶段读取该属性；transformers 5.x 不再默认定义。
-    if not hasattr(PretrainedConfig, "forced_bos_token_id"):
-        PretrainedConfig.forced_bos_token_id = None
-
-    config_class = get_class_from_dynamic_module(
-        "configuration_florence2.Florence2Config",
-        caption_path,
-        local_files_only=True,
-    )
-    with open(f"{caption_path}/config.json", "r", encoding="utf-8") as config_file:
-        config = config_class.from_dict(json.load(config_file))
-    config._attn_implementation = "eager"
-
-    model_class = get_class_from_dynamic_module(
-        "modeling_florence2.Florence2ForConditionalGeneration",
-        caption_path,
-        local_files_only=True,
-    )
-    model_module = sys.modules[model_class.__module__]
-    if not issubclass(model_class, GenerationMixin):
-        model_class = type(
-            "CompatibleFlorence2ForConditionalGeneration",
-            (model_class, GenerationMixin),
-            {},
-        )
-
-    # transformers 5.3 的类级元数据，不改变模型计算逻辑。
-    model_class._supports_sdpa = False
-    model_class._supports_flash_attn = False
-    model_class._supports_flex_attn = False
-    model_class._supports_attention_backend = False
-    model_module.Florence2LanguageModel._tied_weights_keys = LANGUAGE_MODEL_TIED_WEIGHTS
-    model_module.Florence2LanguageForConditionalGeneration._tied_weights_keys = (
-        LANGUAGE_GENERATION_TIED_WEIGHTS
-    )
-    model_module.Florence2LanguageForConditionalGeneration._supports_default_dynamic_cache = (
-        classmethod(lambda cls: False)
-    )
-    model_class._tied_weights_keys = FLORENCE_TIED_WEIGHTS
-
-    model = model_class(config)
-    missing, unexpected = load_model(
-        model,
-        f"{caption_path}/model.safetensors",
-        strict=False,
-    )
-    # tied weights 的源参数会出现在 unexpected（因为 safetensors 存了，但模型通过 tie 引用）
-    allowed_unexpected = {"language_model.model.shared.weight"}
-    # tied weights 的目标参数会出现在 missing（因为 safetensors 不存，由源参数 tie 而来）
-    allowed_missing = set(FLORENCE_TIED_WEIGHTS.keys()) | set(LANGUAGE_MODEL_TIED_WEIGHTS.keys()) | set(LANGUAGE_GENERATION_TIED_WEIGHTS.keys())
-    missing_set = set(missing) - allowed_missing
-    unexpected_set = set(unexpected) - allowed_unexpected
-    if missing_set or unexpected_set:
-        raise RuntimeError(
-            "OmniParser Florence-2 权重与模型结构不匹配: "
-            f"missing={sorted(missing_set)}, unexpected={sorted(unexpected_set)}"
-        )
-    # 显式绑定 tied weights：safetensors 不存 lm_head，必须从 shared weight 共享。
-    # transformers 5.3 的 tie_weights() 在此场景下不会自动建立引用，需手动设置。
-    model.language_model.lm_head.weight = model.language_model.model.shared.weight
-
-    return model.to(device=device, dtype=dtype).eval()
-
-
-def _load_florence_processor(processor_path: str) -> Any:
-    """加载与 OmniParser 旧词表一致的 Florence-2 processor（Strategy B）。"""
-    from transformers import (  # type: ignore[import-untyped]
-        CLIPImageProcessor,
-        PreTrainedTokenizerBase,
-        PreTrainedTokenizerFast,
-    )
-    from transformers.dynamic_module_utils import get_class_from_dynamic_module  # type: ignore[import-untyped]
-
-    # transformers 5.x 将该便捷属性移除，旧 processor 仍通过它读取已有
-    # special tokens。只补只读属性，不修改 tokenizer 的词表。
-    if not hasattr(PreTrainedTokenizerBase, "additional_special_tokens"):
-        PreTrainedTokenizerBase.additional_special_tokens = property(
-            lambda tokenizer: tokenizer.special_tokens_map.get(
-                "additional_special_tokens", []
-            )
-        )
-
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_file=f"{processor_path}/tokenizer.json",
-        model_max_length=1024,
-        **FLORENCE_TOKENIZER_SPECIAL_TOKENS,
-    )
-    image_processor = CLIPImageProcessor.from_pretrained(
-        processor_path,
-        local_files_only=True,
-    )
-    processor_class = get_class_from_dynamic_module(
-        "processing_florence2.Florence2Processor",
-        processor_path,
-        local_files_only=True,
-    )
-    return processor_class(image_processor=image_processor, tokenizer=tokenizer)
-
-
-def load_omniparser() -> dict[str, Any]:
-    """加载 OmniParser 全部组件。"""
-    from ultralytics import YOLO  # type: ignore[import-untyped]
-    import easyocr  # type: ignore[import-untyped]
-
-    device = get_device()
-    dtype = get_dtype()
-    log(f"加载 OmniParser（device={device}）…")
-
-    yolo = YOLO(str(ICON_DETECT_DIR / "model.pt"))
-
-    caption_processor = _load_florence_processor(str(ICON_PROCESSOR_DIR))
-    caption_model = _load_florence_model(str(ICON_CAPTION_DIR), device, dtype)
-
-    reader = easyocr.Reader(
-        ["ch_sim", "en"],
-        gpu=(device == "cuda"),
-        model_storage_directory=str(EASYOCR_DIR),
-        download_enabled=False,
-        verbose=False,
-    )
-
-    return {
-        "yolo": yolo,
-        "caption_model": caption_model,
-        "caption_processor": caption_processor,
-        "reader": reader,
-        "device": device,
-    }
-
-
-def run_omniparser(components: dict[str, Any], image_path: str) -> tuple[str, list[dict[str, Any]]]:
-    """使用 OmniParser 执行推理：EasyOCR 文字 + YOLO 图标检测 + Florence-2 描述。"""
-    import cv2  # type: ignore[import-untyped]
-    import numpy as np  # type: ignore[import-untyped]
-
-    yolo = components["yolo"]
-    caption_model = components["caption_model"]
-    caption_processor = components["caption_processor"]
-    reader = components["reader"]
-
-    items: list[dict[str, Any]] = []
-
-    # 1. EasyOCR 文字识别
+def _check_file(path: Path) -> bool:
     try:
-        image_cv = cv2.imread(image_path)
-        if image_cv is None:
-            raise FileNotFoundError(f"无法读取图片: {image_path}")
-        ocr_results = reader.readtext(image_cv)
-        for entry in ocr_results:
-            bbox, text, conf = _parse_easyocr_entry(entry)
-            if text:
-                box = [[int(p[0]), int(p[1])] for p in bbox]
-                items.append({
-                    "text": text,
-                    "confidence": float(conf),
-                    "box": box,
-                    "source": "easyocr",
-                })
-    except Exception as exc:
-        log(f"EasyOCR 识别失败：{exc}")
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
 
-    # 2. YOLO 图标检测
-    detections: list[tuple[tuple[int, int, int, int], float]] = []
+
+def _check_dir_has_files(path: Path, min_count: int = 1) -> bool:
     try:
-        results = yolo(image_path, verbose=False)
-        for result in results:
-            for box in result.boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                conf = float(box.conf[0])
-                detections.append(((int(x1), int(y1), int(x2), int(y2)), conf))
-    except Exception as exc:
-        log(f"YOLO 检测失败：{exc}")
-
-    # 3. Florence-2 为检测到的图标区域批量生成描述
-    if detections:
-        try:
-            captions = _caption_icons(caption_model, caption_processor, image_cv, detections)
-            for (x1, y1, x2, y2), conf in detections:
-                idx = len([d for d in detections if d[0][0] < x1 or (d[0][0] == x1 and d[0][1] < y1)])
-                caption = captions[idx] if idx < len(captions) else ""
-                if caption:
-                    items.append({
-                        "text": caption,
-                        "confidence": conf,
-                        "box": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
-                        "source": "icon",
-                    })
-        except Exception as exc:
-            log(f"图标描述失败：{exc}")
-
-    text = "\n".join(item["text"] for item in items if item.get("text"))
-    return text, items
+        if not path.is_dir():
+            return False
+        return len(list(path.iterdir())) >= min_count
+    except OSError:
+        return False
 
 
-def _caption_icons(model: Any, processor: Any, image: np.ndarray, detections: list[tuple[tuple[int, int, int, int], float]]) -> list[str]:
-    """批量为图标区域生成描述（与原始 OmniParser 对齐：64x64 + num_beams=1 + do_resize=False）。"""
-    import torch  # type: ignore[import-untyped]
-    import cv2  # type: ignore[import-untyped]
-    from PIL import Image as PILImage  # type: ignore[import-untyped]
-
-    cropped_images: list[PILImage.Image] = []
-    for (x1, y1, x2, y2), _conf in detections:
-        x1, x2 = int(x1), int(x2)
-        y1, y2 = int(y1), int(y2)
-        crop = image[y1:y2, x1:x2, :]
-        if crop.size == 0:
-            crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        else:
-            crop = cv2.resize(crop, (64, 64))
-        cropped_images.append(PILImage.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))
-
-    if not cropped_images:
-        return []
-
-    device = model.device
-    dtype = next(model.parameters()).dtype
-    captions: list[str] = []
-    prompt = CAPTION_PROMPT
-    batch_size = 128
-
-    for i in range(0, len(cropped_images), batch_size):
-        batch = cropped_images[i:i + batch_size]
-        inputs = processor(
-            images=batch,
-            text=[prompt] * len(batch),
-            return_tensors="pt",
-            do_resize=False,
-        ).to(device, dtype=dtype)
-
-        with torch.inference_mode():
-            generated_ids = model.generate(
-                input_ids=inputs["input_ids"],
-                pixel_values=inputs["pixel_values"],
-                max_new_tokens=20,
-                num_beams=1,
-                do_sample=False,
-            )
-
-        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
-        captions.extend([t.strip() for t in generated_text])
-
-    return captions
+def verify_model_integrity() -> list[str]:
+    missing: list[str] = []
+    if not _check_file(ICON_DETECT_DIR / "model.pt"):
+        missing.append("omniparser/icon_detect/model.pt")
+    if not _check_dir_has_files(PPOCR_DIR, 1):
+        missing.append("ppocr/ (RapidOCR 模型未下载)")
+    return missing
 
 
-def _parse_easyocr_entry(entry: Any) -> tuple[list[list[float]], str, float]:
-    """兼容 EasyOCR 不同版本的返回结构。
-
-    常见结构：
-      - (bbox, text, conf)
-      - (bbox, text, conf, ?)
-      - (bbox, text)
-    """
-    if isinstance(entry, (list, tuple)) and len(entry) >= 3:
-        bbox, text, conf = entry[0], entry[1], entry[2]
-    elif isinstance(entry, (list, tuple)) and len(entry) == 2:
-        bbox, text = entry
-        conf = 0.0
-    else:
-        raise ValueError(f"无法解析 EasyOCR 返回项：{entry}")
-    return [[float(p[0]), float(p[1])] for p in bbox], str(text), float(conf)
-
-
-def _move_inputs(inputs: Any, device: Any) -> Any:
-    """将模型输入张量移动到指定设备。"""
-    if hasattr(inputs, "to"):
-        try:
-            return inputs.to(device)
-        except Exception:
-            return inputs
-    if isinstance(inputs, dict):
-        moved: dict[str, Any] = {}
-        for key, value in inputs.items():
-            if hasattr(value, "to"):
-                try:
-                    moved[key] = value.to(device)
-                except Exception:
-                    moved[key] = value
-            else:
-                moved[key] = value
-        return moved
-    return inputs
-
-
-# ---------------------------------------------------------------------------
-# Auto 引擎
-# ---------------------------------------------------------------------------
-def run_auto(image_path: str) -> tuple[str, list[dict[str, Any]], str]:
-    """运行 GLM-OCR + OmniParser 并合并结果。返回 (全文, items, model 显示名)。"""
-    text_parts: list[str] = []
-    items: list[dict[str, Any]] = []
-
-    # GLM-OCR
-    try:
-        model, processor = load_glm_ocr()
-        glm_text, glm_items = run_glm_ocr(model, processor, image_path)
-        if glm_text:
-            text_parts.append(glm_text)
-        for item in glm_items:
-            item["source"] = "glm"
-            items.append(item)
-    except Exception as exc:
-        log(f"GLM-OCR 推理失败：{exc}")
-
-    # OmniParser
-    try:
-        components = load_omniparser()
-        omni_text, omni_items = run_omniparser(components, image_path)
-        if omni_text:
-            text_parts.append(omni_text)
-        items.extend(omni_items)
-    except Exception as exc:
-        log(f"OmniParser 推理失败：{exc}")
-
-    text = "\n".join(part for part in text_parts if part)
-    return text, items, AUTO_MODEL_DISPLAY
-
-
-# ---------------------------------------------------------------------------
-# 自检
-# ---------------------------------------------------------------------------
-def self_test() -> bool:
-    """验证全部模型可加载。"""
-    import traceback
-    # 先校验文件完整性，避免因文件缺失导致难以理解的加载错误
+def ensure_models_ready() -> None:
     missing = verify_model_integrity()
     if missing:
         log("模型文件不完整，缺失：")
         for item in missing:
             log(f"  - {item}")
-        return False
-    try:
-        load_glm_ocr()
-    except Exception as exc:
-        log(f"GLM-OCR 自检失败：{exc}")
-        log(traceback.format_exc())
-        return False
-    try:
-        load_omniparser()
-    except Exception as exc:
-        log(f"OmniParser 自检失败：{exc}")
-        log(traceback.format_exc())
-        return False
-    return True
+        emit_error("MODEL_INITIALIZATION_FAILED", f"模型文件不完整，缺失 {len(missing)} 项。请重新运行 vcli init。")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
-# 推理入口
+# PP-OCRv6 引擎
 # ---------------------------------------------------------------------------
-def run_inference(image_path: str, engine: str) -> None:
-    """按引擎执行推理并输出 JSON。"""
+_ppocr_engine: Any = None
+
+
+def load_ppocr() -> Any:
+    global _ppocr_engine
+    if _ppocr_engine is not None:
+        return _ppocr_engine
+
     try:
-        if engine == "glm":
-            model, processor = load_glm_ocr()
-            text, items = run_glm_ocr(model, processor, image_path)
-            model_name = GLM_OCR_MODEL_DISPLAY
-        elif engine == "omni":
-            components = load_omniparser()
-            text, items = run_omniparser(components, image_path)
-            model_name = OMNIPARSER_MODEL_DISPLAY
-        elif engine == "auto":
-            text, items, model_name = run_auto(image_path)
+        from rapidocr import RapidOCR  # type: ignore[import-untyped]
+        from rapidocr.utils.typings import EngineType  # type: ignore[import-untyped]
+    except ImportError as exc:
+        emit_error("MODEL_RUNTIME_MISSING", f"RapidOCR 未安装或无法导入：{exc}")
+        sys.exit(1)
+
+    try:
+        engine = EngineType.OPENVINO
+        _ppocr_engine = RapidOCR(params={
+            "Global.model_root_dir": str(PPOCR_DIR),
+            "Det.engine_type": engine,
+            "Cls.engine_type": engine,
+            "Rec.engine_type": engine,
+        })
+    except Exception as exc:
+        emit_error("MODEL_INITIALIZATION_FAILED", f"PP-OCRv6 初始化失败：{exc}")
+        sys.exit(1)
+    return _ppocr_engine
+
+
+def run_ppocr(image_path: str) -> tuple[str, list[dict[str, Any]]]:
+    """对整张图片运行 PP-OCRv6，返回文本和带坐标的识别项。"""
+    engine = load_ppocr()
+    result = engine(image_path)
+    boxes = result.boxes if result.boxes is not None else []
+    txts = result.txts if result.txts is not None else []
+    scores = result.scores if result.scores is not None else []
+
+    items: list[dict[str, Any]] = []
+    for index, text in enumerate(txts):
+        if not text:
+            continue
+        item: dict[str, Any] = {"text": text, "source": "ppocr"}
+        if index < len(scores) and scores[index] is not None:
+            item["confidence"] = float(scores[index])
+        if index < len(boxes) and boxes[index] is not None:
+            pts = [[int(point[0]), int(point[1])] for point in boxes[index]]
+            item["box"] = pts
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            item["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
+        items.append(item)
+
+    text = "\n".join(item["text"] for item in items)
+    return text, items
+
+
+# ---------------------------------------------------------------------------
+# YOLO UI 元素检测
+# ---------------------------------------------------------------------------
+_yolo_model: Any = None
+
+
+def load_yolo() -> Any:
+    global _yolo_model
+    if _yolo_model is not None:
+        return _yolo_model
+
+    from ultralytics import YOLO  # type: ignore[import-untyped]
+    log(f"加载 OmniParser YOLO（device={get_device()}）…")
+    yolo = YOLO(str(ICON_DETECT_DIR / "model.pt"))
+    device = get_device()
+    if device.startswith("cuda"):
+        yolo.to(device)
+    _yolo_model = yolo
+    return _yolo_model
+
+
+def run_yolo_detection(image_path: str) -> list[dict[str, Any]]:
+    """用 YOLO 检测 UI 元素，返回带 bbox 的检测项。"""
+    model = load_yolo()
+    results = model(image_path, conf=BOX_THRESHOLD, verbose=False)
+    detections: list[dict[str, Any]] = []
+    for result in results:
+        for box in result.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            conf = float(box.conf[0])
+            detections.append({
+                "box": [[int(x1), int(y1)], [int(x2), int(y1)], [int(x2), int(y2)], [int(x1), int(y2)]],
+                "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                "confidence": conf,
+                "source": "yolo",
+            })
+    return detections
+
+
+# ---------------------------------------------------------------------------
+# 框匹配与合并
+# ---------------------------------------------------------------------------
+def box_iou(a: list[int], b: list[int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    inter = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def center_dist(a: list[int], b: list[int]) -> float:
+    ax = (a[0] + a[2]) / 2
+    ay = (a[1] + a[3]) / 2
+    bx = (b[0] + b[2]) / 2
+    by = (b[1] + b[3]) / 2
+    return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
+
+def assign_text_to_ui(
+    ocr_items: list[dict[str, Any]],
+    ui_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """把 OCR 文字框分配到 YOLO UI 元素上。
+
+    返回：
+    - ui_with_text：每个 UI 元素内匹配到的文字列表
+    - unassigned：未匹配到任何 UI 元素的文字段落
+    """
+    assigned_flags = [False] * len(ocr_items)
+    ui_with_text: list[dict[str, Any]] = []
+
+    for ui in ui_items:
+        ui_bbox = ui["bbox"]
+        texts: list[tuple[str, float]] = []
+        for idx, ocr in enumerate(ocr_items):
+            if assigned_flags[idx]:
+                continue
+            ocr_bbox = ocr.get("bbox")
+            if not ocr_bbox:
+                continue
+            ui_area = max(1, (ui_bbox[2] - ui_bbox[0]) * (ui_bbox[3] - ui_bbox[1]))
+            ocr_area = max(1, (ocr_bbox[2] - ocr_bbox[0]) * (ocr_bbox[3] - ocr_bbox[1]))
+            if ui_area < MIN_UI_AREA:
+                continue
+            iou = box_iou(ui_bbox, ocr_bbox)
+            dist = center_dist(ui_bbox, ocr_bbox)
+            area_ratio = ocr_area / ui_area
+            if (iou >= IOU_MATCH_THRESHOLD or dist <= CENTER_DIST_THRESHOLD) and area_ratio <= MAX_AREA_RATIO:
+                conf = ocr.get("confidence", 0.0)
+                texts.append((ocr["text"], conf))
+                assigned_flags[idx] = True
+
+        merged_text = " ".join(t[0] for t in texts)
+        avg_conf = sum(t[1] for t in texts) / len(texts) if texts else ui["confidence"]
+        ui_with_text.append({
+            "text": merged_text,
+            "box": ui["box"],
+            "bbox": ui_bbox,
+            "confidence": round(avg_conf, 4),
+            "type": "ui_element" if not merged_text else "ui_text",
+            "source": "yolo+ocr",
+        })
+
+    unassigned: list[dict[str, Any]] = []
+    for idx, ocr in enumerate(ocr_items):
+        if not assigned_flags[idx]:
+            unassigned.append(ocr)
+
+    return ui_with_text, unassigned
+
+
+def merge_web_results(
+    image_path: str,
+    ocr_items: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]], str]:
+    """网页模式：OCR 全图 + YOLO UI 定位 + 合并。"""
+    log("Web 模式：OCR 全图识别 + YOLO UI 定位")
+
+    ui_items = run_yolo_detection(image_path)
+    log(f"YOLO 检测到 {len(ui_items)} 个 UI 元素（阈值={BOX_THRESHOLD}）")
+
+    ui_with_text, unassigned = assign_text_to_ui(ocr_items, ui_items)
+
+    # 合并所有元素：UI 元素 + 未匹配的 OCR 段落
+    all_items = ui_with_text + unassigned
+
+    # 排序：从上到下、从左到右
+    def sort_key(item: dict[str, Any]) -> tuple[int, int]:
+        bbox = item.get("bbox") or item.get("box")
+        if bbox:
+            return (bbox[1], bbox[0])
+        return (0, 0)
+
+    all_items.sort(key=sort_key)
+
+    # 生成全文
+    text_parts: list[str] = []
+    for item in all_items:
+        if item.get("text"):
+            text_parts.append(item["text"])
         else:
-            emit_error("MODEL_RECOGNITION_FAILED", f"未知引擎：{engine}")
-            sys.exit(1)
+            text_parts.append("[ui_element]")
+
+    text = "\n".join(text_parts)
+    model_name = f"{YOLO_MODEL_DISPLAY} + {PPOCR_MODEL_DISPLAY}"
+    return text, all_items, model_name
+
+
+def run_inference(image_path: str, ocr_engine: str, web_mode: bool) -> None:
+    try:
+        text, ocr_items = run_ppocr(image_path)
     except ImportError as exc:
         emit_error("MODEL_RUNTIME_MISSING", f"Python 依赖未安装：{exc}")
         sys.exit(1)
@@ -741,33 +401,59 @@ def run_inference(image_path: str, engine: str) -> None:
         emit_error("MODEL_INITIALIZATION_FAILED", f"模型加载失败：{exc}")
         sys.exit(1)
 
-    if not text or not items:
+    if not text or not ocr_items:
         emit_error("MODEL_TEXT_EMPTY", "未识别到文字")
         sys.exit(1)
+
+    if web_mode:
+        text, items, model_name = merge_web_results(image_path, ocr_items)
+    else:
+        items = ocr_items
+        model_name = PPOCR_MODEL_DISPLAY
 
     emit({
         "ok": True,
         "text": text,
         "items": items,
-        "engine": engine,
+        "engine": "web" if web_mode else ocr_engine,
+        "ocr": ocr_engine,
         "model": model_name,
     })
 
 
 # ---------------------------------------------------------------------------
-# 主入口
+# 自检 / 主入口
 # ---------------------------------------------------------------------------
+def self_test() -> bool:
+    import traceback
+    missing = verify_model_integrity()
+    if missing:
+        log("模型文件不完整，缺失：")
+        for item in missing:
+            log(f"  - {item}")
+        return False
+    try:
+        load_ppocr()
+    except Exception as exc:
+        log(f"PP-OCRv6 自检失败：{exc}")
+        log(traceback.format_exc())
+        return False
+    try:
+        load_yolo()
+    except Exception as exc:
+        log(f"YOLO 自检失败：{exc}")
+        log(traceback.format_exc())
+        return False
+    return True
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="vcli 视觉推理（GLM-OCR / OmniParser V2）")
-    parser.add_argument("--init", action="store_true", help="下载全部模型到 ~/.vcli/models/")
+    parser = argparse.ArgumentParser(description="vcli 视觉推理（PP-OCRv6 + YOLO）")
+    parser.add_argument("--init", action="store_true", help="下载全部模型")
     parser.add_argument("--self-test", action="store_true", help="验证模型可加载")
     parser.add_argument("--image", help="图片文件路径")
-    parser.add_argument(
-        "--engine",
-        choices=["glm", "omni", "auto"],
-        default="auto",
-        help="推理引擎（默认 auto）",
-    )
+    parser.add_argument("--ocr", choices=["ppocrv6"], default="ppocrv6", help="OCR 引擎（默认 ppocrv6）")
+    parser.add_argument("--web", action="store_true", help="启用 YOLO UI 元素检测（网页/UI 场景）")
     args = parser.parse_args()
 
     if args.init:
@@ -792,9 +478,8 @@ def main() -> None:
         emit_error("IMAGE_READ_ERROR", f"图片不存在：{args.image}")
         sys.exit(1)
 
-    # 推理前校验模型文件完整性
     ensure_models_ready()
-    run_inference(args.image, args.engine)
+    run_inference(args.image, args.ocr, args.web)
 
 
 if __name__ == "__main__":

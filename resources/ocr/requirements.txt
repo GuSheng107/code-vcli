@@ -1,11 +1,19 @@
 # vcli Python 依赖（不含 torch/torchvision，由 init 阶段根据 CPU/GPU 模式单独安装）
-transformers==5.3.0
-huggingface_hub>=0.24.0
-safetensors>=0.4.0
 ultralytics>=8.3.0
-easyocr>=1.7.0
+huggingface_hub>=0.24.0
 Pillow>=10.0.0
 numpy>=1.24.0
 requests>=2.31.0
-einops>=0.7.0
-timm>=0.9.0
+
+# PP-OCRv6（RapidOCR + OpenVINO）
+rapidocr==3.9.2
+openvino==2026.2.1; sys_platform == "win32"
+openvino==2026.2.1; sys_platform == "linux"
+openvino==2026.2.1; sys_platform == "darwin" and platform_machine == "arm64"
+openvino==2025.0.0; sys_platform == "darwin" and platform_machine == "x86_64"
+pyclipper==1.4.0
+Shapely==2.1.2
+PyYAML==6.0.3
+tqdm==4.70.0
+omegaconf==2.3.1
+antlr4-python3-runtime==4.9.3
