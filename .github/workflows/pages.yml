@@ -1,8 +1,8 @@
-name: 发布 vcli 文档站
+name: 发布 code-vcli 文档站
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "docs/**"
       - ".github/workflows/pages.yml"

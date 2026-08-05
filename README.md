@@ -1,6 +1,10 @@
-# vcli — 截图转文本 CLI
+# code-vcli — 为 AI 模型提供 web 开发视觉能力
 
-面向开发者的本地视觉识别工具。把截图 / 网页截图 / 文档图片转成文本，可输出 JSON 给脚本和 AI Agent 用。推理在本地完成，图片不上传。
+AI 编码模型（如 GLM、DeepSeek、Qwen-max）能写代码，但**无法「看见」屏幕**。
+
+`code-vcli` 给它们一双眼睛：把截图 / 网页截图 / 文档图片转成结构化文本和 JSON，让没有视觉能力的模型也能看懂 UI 布局、按钮位置、卡片结构，准确完成 web 开发任务。
+
+推理在本地完成，图片不上传。
 
 ## 平台
 
@@ -13,7 +17,7 @@
 ## 安装
 
 ```bash
-npm i vcli
+npm i code-vcli
 ```
 
 安装会自动写入 `vcli` 启动入口并加入 PATH。完成后新开终端即可使用：
@@ -34,18 +38,45 @@ vcli init
 
 ```bash
 vcli init --yes
-vcli init --yes --workspace "E:\vcli-data"
+vcli init --yes --workspace "E:\code-vcli-data"
 ```
 
 ## 使用
 
 ```bash
 vcli run ./image.png          # 普通模式：整图 OCR
-vcli run ./webpage.png --web  # Web 模式：网页/UI 截图，叠加 YOLO 元素检测
-vcli run ./image.png --json   # JSON 输出
+vcli run ./screenshot.png --web  # Web 模式：网页截图，叠加 YOLO 元素检测
+vcli run ./image.png --json   # JSON 输出（AI 调用建议始终加 --json）
 ```
 
-Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位 UI 元素，通过 IoU、中心点距离、面积比把文字归到对应元素上，最后按位置排序输出。
+### AI 调用场景
+
+对于 AI 编码 Agent，推荐始终使用 `--json` 输出，便于解析 UI 元素的结构化信息：
+
+```bash
+vcli run ./webpage.png --web --json
+```
+
+输出示例：
+
+```json
+{
+  "ok": true,
+  "text": "登录\n注册\n用户名",
+  "items": [
+    {
+      "text": "登录",
+      "confidence": 0.98,
+      "bbox": [10, 20, 60, 40],
+      "source": "yolo+ocr",
+      "type": "ui_text"
+    }
+  ],
+  "engine": "web"
+}
+```
+
+Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输入框、卡片等 UI 元素，通过 IoU、中心点距离、面积比把文字归到对应元素上，最后按位置排序输出。
 
 ## 命令
 
@@ -83,7 +114,7 @@ Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位 UI 元素�
 
 ## AI Agent Skill
 
-`.trae/skills/vcli-ocr/SKILL.md` 提供模式选择、调用示例、JSON 字段和错误码说明，供 AI Agent 调用 vcli 时参考。
+`.trae/skills/code-vcli-ocr/SKILL.md` 提供模式选择、调用示例、JSON 字段和错误码说明，供 AI Agent 调用 code-vcli 时参考。
 
 ## 开发
 

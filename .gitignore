@@ -12,3 +12,4 @@ npm_recovery_codes.txt
 .npmrc
 __pycache__/
 *.pyc
+/test/

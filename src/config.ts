@@ -7,7 +7,7 @@ import { VcliError } from "./errors.js";
 import { getConfigRoot } from "./paths.js";
 
 /**
- * 轻量配置文件，固定存放在 ~/.vcli/config.json。
+ * 轻量配置文件，固定存放在 ~/.code-vcli/config.json。
  * 仅用于记录用户选择的 workspace 路径，本身不占用空间。
  */
 interface LightConfig {
@@ -90,7 +90,7 @@ export async function resolveWorkspacePath(input: string): Promise<string> {
 }
 
 export class ConfigStore {
-  /** 固定的轻量配置目录（~/.vcli） */
+  /** 固定的轻量配置目录（~/.code-vcli） */
   readonly directory: string;
   readonly configPath: string;
 
@@ -99,7 +99,7 @@ export class ConfigStore {
     this.configPath = path.join(directory, "config.json");
   }
 
-  /** 用户选择的工作区根目录（vcli init 时设置，默认 ~/.vcli） */
+  /** 用户选择的工作区根目录（code-vcli init 时设置，默认 ~/.code-vcli） */
   async getWorkspace(): Promise<string> {
     const config = await readJsonFile(this.configPath, isLightConfig);
     return config?.workspace ?? defaultWorkspace();

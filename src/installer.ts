@@ -95,7 +95,7 @@ export function getPosixProfilePath(
 
 async function ensurePosixPath(binDirectory: string): Promise<void> {
   const profile = getPosixProfilePath();
-  const marker = "# vcli user bin";
+  const marker = "# code-vcli user bin";
   let existing = "";
   try {
     existing = await readFile(profile, "utf8");
@@ -140,7 +140,7 @@ export async function installCurrentPackage(force = false): Promise<string> {
   } catch (error) {
     throw new VcliError(
       "INSTALL_ERROR",
-      force ? "无法覆盖现有 vcli 安装" : "该版本已安装；如需覆盖请添加 --force",
+      force ? "无法覆盖现有 code-vcli 安装" : "该版本已安装；如需覆盖请添加 --force",
       5,
       { cause: error },
     );

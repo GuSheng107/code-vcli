@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f0edff" />
+    <meta name="description" content="下载 code-vcli-ocr Skill，通过 code-vcli CLI 对截图执行本地视觉识别与网页 UI 元素解析。为无视觉能力的 AI 模型提供 web 开发视觉能力。" />
+    <meta property="og:title" content="code-vcli-ocr Skill — AI 模型的 Web 开发视觉能力" />
+    <meta property="og:description" content="本地视觉识别，支持 PP-OCRv6 普通模式与 YOLO Web 模式。" />
+    <meta property="og:type" content="website" />
+    <title>Skills — code-vcli</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./styles.css?v=20260805-2" />
+    <script src="./app.js?v=20260805-2" defer></script>
+  </head>
+  <body class="skills-page">
+    <header class="topbar">
+      <a class="logo" href="./index.html" aria-label="code-vcli 首页">
+        <span class="logo-icon">CVC</span>
+        <span class="logo-text">code-vcli</span>
+      </a>
+      <nav class="topnav" aria-label="主导航">
+        <a href="./index.html">CLI</a>
+        <a class="active" href="./skills.html" aria-current="page">Skills</a>
+        <a href="./docs.html">工具文档</a>
+        <a class="topnav-github" href="https://github.com/GuSheng107/code-vcli" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main class="skills-main">
+      <section class="skills-hero">
+        <div class="skill-orbit skill-orbit-one" aria-hidden="true"></div>
+        <div class="skill-orbit skill-orbit-two" aria-hidden="true"></div>
+        <div class="skills-hero-inner">
+          <span class="skill-eyebrow">CODE-VCLI SKILL</span>
+          <h1>安装 code-vcli-ocr<br /><em>视觉识别 Skill</em></h1>
+          <p>让 AI 编码模型「看见」屏幕 — 本地截图转文本，支持普通 OCR 与网页 UI 元素解析。</p>
+          <div class="skill-install-center">
+            <div class="skill-quick-start">
+              <strong>快速开始</strong>
+              <p>请将下面的指令发给 Agent</p>
+            </div>
+            <div class="skill-agent-prompt">
+              <p id="skill-agent-prompt">请使用 <code>npm i code-vcli</code> 安装 CLI 并运行 <code>vcli init</code> 初始化视觉模型环境；从 <code>https://github.com/GuSheng107/code-vcli</code> 下载 <code>.trae/skills/code-vcli-ocr</code> 复制到项目的 <code>.trae/skills/</code> 目录；之后用 <code>vcli run ./image.png --json</code> 进行识别。</p>
+              <button type="button" class="copy-btn" data-copy="skill-agent-prompt" aria-label="复制发给 Agent 的提示词">复制</button>
+            </div>
+            <a class="download-skill" href="./vcli-skills.zip" download>
+              <span class="download-icon" aria-hidden="true">↓</span>
+              <span class="download-text"><strong>下载 ZIP</strong><small>包含 code-vcli-ocr Skill</small></span>
+            </a>
+          </div>
+          <a class="ghost-link" href="#install-skill">查看两种安装方式</a>
+        </div>
+      </section>
+
+      <section class="skills-section" aria-labelledby="mode-title">
+        <div class="section-heading">
+          <span class="kicker">MODES</span>
+          <h2 id="mode-title">两种识别模式</h2>
+          <p>根据图片类型选择普通模式或 Web 模式。</p>
+        </div>
+        <div class="mode-grid">
+          <article class="mode-card recommended">
+            <div class="mode-top"><span class="mode-symbol">OCR</span><b>推荐</b></div>
+            <h3>普通模式（PP-OCRv6）</h3>
+            <p>整图 OCR，速度快、带坐标。适合文档、扫描件、纯文字图片。</p>
+            <div class="cmd-block"><code>vcli run ./image.png --json</code></div>
+            <ul>
+              <li>PP-OCRv6（RapidOCR + OpenVINO）</li>
+              <li>支持中英日等 50 种语言</li>
+              <li>返回文字 + 置信度 + 坐标</li>
+            </ul>
+          </article>
+          <article class="mode-card cli-card">
+            <div class="mode-top"><span class="mode-symbol">WEB</span><b>Web 模式</b></div>
+            <h3>Web 模式（+ YOLO）</h3>
+            <p>叠加 YOLO UI 元素检测，把文字归到对应元素上。适合网页 / UI 截图。</p>
+            <div class="cmd-block"><code>vcli run ./webpage.png --web --json</code></div>
+            <ul>
+              <li>OmniParser V2 YOLO 检测 UI 元素</li>
+              <li>通过 IoU、中心点距离、面积比合并文字</li>
+              <li>输出 ui_text / ui_element 结构</li>
+            </ul>
+          </article>
+        </div>
+        <div class="privacy-note">
+          <span class="privacy-mark" aria-hidden="true">🔒</span>
+          <div>
+            <strong>本地推理，图片不上传</strong>
+            <p>推理完全在本地完成，无遥测。首次 <code>vcli init</code> 需下载模型约 1-2 GB。</p>
+          </div>
+        </div>
+        <p class="mode-retention">不确定图片类型时，先向用户确认是「网页/UI」还是「普通文档」再选择模式。</p>
+      </section>
+
+      <section class="skills-section install-section" id="install-skill" aria-labelledby="install-title">
+        <div class="section-heading">
+          <span class="kicker">INSTALL</span>
+          <h2 id="install-title">安装 Skill</h2>
+          <p>任选一种方式安装，然后完成首次配置。</p>
+        </div>
+        <div class="install-skill-grid">
+          <div class="install-options">
+            <div class="install-option-card">
+              <span class="install-option-tag">方式一</span>
+              <h3>ZIP 安装</h3>
+              <p>下载后复制 <code>code-vcli-ocr</code> 文件夹到项目的 <code>.trae/skills/</code> 目录。</p>
+              <a class="download-skill download-skill-inline" href="./vcli-skills.zip" download>
+                <span class="download-icon" aria-hidden="true">↓</span>
+                <span class="download-text"><strong>下载 ZIP</strong><small>包含 code-vcli-ocr Skill</small></span>
+              </a>
+            </div>
+            <div class="install-option-card">
+              <span class="install-option-tag">方式二</span>
+              <h3>Git 克隆</h3>
+              <p>从 GitHub 克隆仓库，复制 <code>.trae/skills/code-vcli-ocr</code> 到你的项目。</p>
+              <code>git clone https://github.com/GuSheng107/code-vcli.git</code>
+            </div>
+          </div>
+          <div class="install-next-step">
+            <span class="install-option-tag next-tag">下一步</span>
+            <h3>首次配置</h3>
+            <p>安装 CLI 后运行 <code>vcli init</code> 初始化视觉模型环境（创建 venv、选计算模式、下载模型），之后即可开始识别。</p>
+          </div>
+          <div class="skill-structure">
+            <h3>文件结构</h3>
+            <pre class="skill-tree"><code>code-vcli-ocr/
+└── SKILL.md</code></pre>
+          </div>
+        </div>
+        <p class="skill-security">Skill 位置：<code>.trae/skills/code-vcli-ocr/SKILL.md</code>。模型缓存：<code>~/.code-vcli/models/</code>。工作区：<code>~/.code-vcli/</code> 或自定义路径。</p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a href="https://github.com/GuSheng107/code-vcli" target="_blank" rel="noreferrer">GitHub ↗</a>
+      <p>code-vcli · 为 AI 模型提供 Web 开发视觉能力</p>
+    </footer>
+    <div class="toast" role="status" aria-live="polite">已复制</div>
+  </body>
+</html>

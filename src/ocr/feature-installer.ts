@@ -264,7 +264,7 @@ export async function installVisionFeature(
   // 5. 确认安装
   if (!options.yes) {
     const promptText = [
-      "即将初始化 vcli 视觉模型环境。",
+      "即将初始化 code-vcli 视觉模型环境。",
       "",
       `模型：${PPOCR_MODEL_DISPLAY} + ${OMNIPARSER_MODEL_DISPLAY}`,
       "方式：本地离线推理，图片不会上传",

@@ -1,7 +1,7 @@
 {
-  "name": "vcli",
+  "name": "code-vcli",
   "version": "1.0.0",
-  "description": "vcli — VisionCLI 截图转文本工具",
+  "description": "code-vcli — 为 AI 模型提供 web 开发视觉能力的 CLI 工具",
   "type": "module",
   "bin": {
     "vcli": "dist/cli.js"
@@ -20,7 +20,8 @@
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "postinstall": "node scripts/postinstall.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "build:skill-zip": "node scripts/build-skill-zip.mjs"
   },
   "keywords": [
     "vision",
@@ -33,12 +34,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GuSheng107/vcli.git"
+    "url": "git+https://github.com/GuSheng107/code-vcli.git"
   },
   "bugs": {
-    "url": "https://github.com/GuSheng107/vcli/issues"
+    "url": "https://github.com/GuSheng107/code-vcli/issues"
   },
-  "homepage": "https://github.com/GuSheng107/vcli",
+  "homepage": "https://github.com/GuSheng107/code-vcli",
   "license": "AGPL-3.0-or-later",
   "publishConfig": {
     "access": "public",
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "fflate": "0.8.2",
     "tsx": "4.23.5",
     "typescript": "5.9.3"
   }

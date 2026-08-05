@@ -86,7 +86,7 @@ export async function runVisionInference(
   if (!ready) {
     throw new VcliError(
       "MODEL_NOT_INSTALLED",
-      "视觉模型尚未安装，运行 vcli init 初始化",
+      "视觉模型尚未安装，运行 code-vcli init 初始化",
       6,
     );
   }
@@ -97,14 +97,14 @@ export async function runVisionInference(
   if (!(await fileExists(pythonPath))) {
     throw new VcliError(
       "MODEL_RUNTIME_MISSING",
-      "Python 运行时丢失，请重新运行 vcli init",
+      "Python 运行时丢失，请重新运行 code-vcli init",
       6,
     );
   }
   if (!(await fileExists(scriptPath))) {
     throw new VcliError(
       "MODEL_RUNTIME_MISSING",
-      "推理脚本丢失，请重新运行 vcli init",
+      "推理脚本丢失，请重新运行 code-vcli init",
       6,
     );
   }

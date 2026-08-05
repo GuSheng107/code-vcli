@@ -31,18 +31,18 @@ import {
 } from "./ocr/constants.js";
 import type { VisionOcrEngineType } from "./ocr/constants.js";
 
-const DISCLAIMER = "vcli — VisionCLI 截图转文本工具";
+const DISCLAIMER = "code-vcli — 为 AI 模型提供 web 开发视觉能力的 CLI 工具";
 
 const HELP = `${DISCLAIMER}
 
 Usage:
-  vcli [command]
+  code-vcli [command]
 
 Commands:
-  vcli                       打开交互界面
+  code-vcli                  打开交互界面
   init [--yes] [--workspace <path>] [--reset-workspace]  初始化视觉模型环境
   run <image> [options]      对图片执行视觉识别
-  info                       显示 vcli 与系统环境信息
+  info                       显示 code-vcli 与系统环境信息
   update                     从 npm Registry 更新到最新版
   install [--force]          安装到用户目录并加入 PATH
   version [--check]          显示版本，可检查 npm 最新版本
@@ -70,20 +70,20 @@ Web Mode:
 
 Init:
   需要 Python ${PYTHON_MIN_VERSION}+ 环境
-  模型缓存位置：~/.vcli/models/
+  模型缓存位置：~/.code-vcli/models/
   下载大小：${VISION_DOWNLOAD_SIZE_ESTIMATE}
-  首次使用前必须运行 vcli init
+  首次使用前必须运行 code-vcli init
 
 Examples:
-  vcli init
-  vcli init --yes
-  vcli run ./screenshot.png
-  vcli run ./screenshot.png --json
-  vcli run ./webpage.png --web
-  vcli run ./webpage.png --web --json
-  vcli info
-  vcli update
-  vcli help
+  code-vcli init
+  code-vcli init --yes
+  code-vcli run ./image.png
+  code-vcli run ./image.png --json
+  code-vcli run ./image.png --web
+  code-vcli run ./image.png --web --json
+  code-vcli info
+  code-vcli update
+  code-vcli help
 `;
 
 interface RunArguments {
@@ -183,10 +183,10 @@ async function validateImageFile(imagePath: string): Promise<void> {
 async function promptWorkspaceSelection(configStore: ConfigStore): Promise<string> {
   const defaultWorkspace = await configStore.getWorkspace();
   const prompt = [
-    "选择 vcli 工作区路径（用于存放 venv 和模型权重，约 1-2 GB）",
+    "选择 code-vcli 工作区路径（用于存放 venv 和模型权重，约 1-2 GB）",
     "",
     `默认路径：${defaultWorkspace}`,
-    "如需使用其他盘符，请输入完整路径，例如：E:\\vcli-data",
+    "如需使用其他盘符，请输入完整路径，例如：E:\\code-vcli-data",
     "直接回车使用默认路径：",
   ].join("\n");
   const input = (await promptText(prompt)).trim();
@@ -238,7 +238,7 @@ async function runInitCommand(
     prompt: async (message: string) => promptText(message),
   });
   await configStore.setInitialized();
-  stdout.write(`vcli 视觉模型环境已就绪。\n工作区：${workspace}\n`);
+  stdout.write(`code-vcli 视觉模型环境已就绪。\n工作区：${workspace}\n`);
 }
 
 async function runRunCommand(
@@ -251,7 +251,7 @@ async function runRunCommand(
   }
   const parsed = parseRunArguments(args);
   if (!parsed.image) {
-    throw new VcliError("INVALID_ARGUMENT", "必须指定图片路径：vcli run <image>", 2);
+    throw new VcliError("INVALID_ARGUMENT", "必须指定图片路径：code-vcli run <image>", 2);
   }
 
   const imagePath = path.resolve(parsed.image);
@@ -290,7 +290,7 @@ async function runInfoCommand(
   const pythonInfo = await checkPythonAvailable();
 
   const lines: string[] = [
-    "vcli 环境信息",
+    "code-vcli 环境信息",
     "==============",
     "",
     `版本：v${packageInfo.version}`,
@@ -336,13 +336,13 @@ async function runInfoCommand(
 
 async function runVersionCommand(args: string[]): Promise<void> {
   const current = (await getPackageInfo()).version;
-  stdout.write(`vcli ${current}\n`);
+  stdout.write(`code-vcli ${current}\n`);
   if (args.includes("--check")) {
     const latest = await getLatestVersion();
     const comparison = compareVersions(latest, current);
     stdout.write(
       comparison > 0
-        ? `发现新版本 ${latest}，运行 vcli update 更新\n`
+        ? `发现新版本 ${latest}，运行 code-vcli update 更新\n`
         : comparison === 0
           ? "已是最新版本\n"
           : `本地版本 ${current} 高于 npm 当前版本 ${latest}，无需更新\n`,
@@ -352,12 +352,12 @@ async function runVersionCommand(args: string[]): Promise<void> {
 
 async function runUpdateCommand(): Promise<void> {
   await updateFromRegistry();
-  stdout.write("vcli 已更新到最新版本\n");
+  stdout.write("code-vcli 已更新到最新版本\n");
 }
 
 async function runInstallCommand(args: string[]): Promise<void> {
   const directory = await installCurrentPackage(args.includes("--force"));
-  stdout.write(`vcli 已安装到 ${directory}\n请重新打开终端使 PATH 生效。\n`);
+  stdout.write(`code-vcli 已安装到 ${directory}\n请重新打开终端使 PATH 生效。\n`);
 }
 
 async function pauseInteractive(): Promise<void> {
@@ -396,7 +396,7 @@ async function runInteractive(configStore: ConfigStore): Promise<void> {
     });
     if (!action || action === "exit") {
       clearScreen();
-      stdout.write("vcli 已退出。\n");
+      stdout.write("code-vcli 已退出。\n");
       return;
     }
 
@@ -493,7 +493,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      throw new VcliError("INVALID_ARGUMENT", `未知命令：${command}。运行 vcli help 查看用法`, 2);
+      throw new VcliError("INVALID_ARGUMENT", `未知命令：${command}。运行 code-vcli help 查看用法`, 2);
   }
 }
 
