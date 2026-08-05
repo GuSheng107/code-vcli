@@ -1,4 +1,4 @@
-# code-vcli — 为 AI 模型提供 web 开发视觉能力
+# code-vcli — 为 AI 模型提供 Web 开发视觉能力
 
 AI 编码模型（如 GLM、DeepSeek、Qwen-max）能写代码，但**无法「看见」屏幕**。
 
@@ -6,24 +6,52 @@ AI 编码模型（如 GLM、DeepSeek、Qwen-max）能写代码，但**无法「�
 
 推理在本地完成，图片不上传。
 
+文档站：https://gusheng107.github.io/code-vcli/
+
 ## 平台
 
-- Windows 10/11
-- macOS（Apple Silicon / Intel）
-- Linux（x64 / arm64）
+- Windows 10/11（PowerShell / CMD / Windows Terminal）
+- macOS（Apple Silicon 与 Intel，zsh / bash）
+- Linux（x64 / arm64，bash / zsh）
 
 需要 Node.js 22+ 和 Python 3.10+。
 
 ## 安装
 
+直接使用 npm 安装：
+
 ```bash
 npm i code-vcli
 ```
 
-安装会自动写入 `vcli` 启动入口并加入 PATH。完成后新开终端即可使用：
+安装过程会自动部署运行依赖、用户级 `vcli` 启动入口并加入 PATH。首次安装后重新打开终端，即可直接运行：
 
 ```bash
 vcli help
+```
+
+安装位置：
+
+```text
+Windows：    %LOCALAPPDATA%\.code-vcli\bin\vcli.cmd
+macOS/Linux：~/.code-vcli/bin/vcli
+配置目录：    ~/.code-vcli/
+```
+
+重新打开终端后，直接运行 `vcli` 进入可交互 CLI，或查看完整帮助：
+
+```bash
+vcli help
+```
+
+查看当前生效的 CLI 路径：
+
+```bat
+# Windows
+where vcli
+
+# macOS / Linux
+which vcli
 ```
 
 ## 初始化
@@ -44,14 +72,14 @@ vcli init --yes --workspace "E:\code-vcli-data"
 ## 使用
 
 ```bash
-vcli run ./image.png          # 普通模式：整图 OCR
-vcli run ./screenshot.png --web  # Web 模式：网页截图，叠加 YOLO 元素检测
-vcli run ./image.png --json   # JSON 输出（AI 调用建议始终加 --json）
+vcli run ./image.png              # 普通模式：整图 OCR
+vcli run ./screenshot.png --web   # Web 模式：网页截图，叠加 YOLO 元素检测
+vcli run ./image.png --json       # JSON 输出（AI 调用建议始终加 --json）
 ```
 
 ### AI 调用场景
 
-对于 AI 编码 Agent，推荐始终使用 `--json` 输出，便于解析 UI 元素的结构化信息：
+给 AI Agent 调用时建议始终带 `--json`：
 
 ```bash
 vcli run ./webpage.png --web --json
@@ -77,6 +105,18 @@ vcli run ./webpage.png --web --json
 ```
 
 Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输入框、卡片等 UI 元素，通过 IoU、中心点距离、面积比把文字归到对应元素上，最后按位置排序输出。
+
+## AI Agent Skill
+
+仓库提供 `code-vcli` Skill，让 AI Agent 调用 `vcli` CLI 对截图执行本地视觉识别与网页 UI 元素解析。
+
+推荐通过 Skills CLI 全局安装：
+
+```bash
+npx skills add GuSheng107/code-vcli --skill code-vcli -g
+```
+
+也可以在[文档站 Skills 页面](https://gusheng107.github.io/code-vcli/skills.html)下载 ZIP 手动安装。
 
 ## 命令
 
@@ -108,13 +148,11 @@ Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输
 - PP-OCRv6（RapidOCR + OpenVINO）：整图 OCR，速度快，带坐标
 - OmniParser V2 YOLO：UI 元素检测（`--web` 启用）
 
-## 隐私
+## 隐私和安全
 
-图片本地处理不上传，无遥测。
-
-## AI Agent Skill
-
-`.trae/skills/code-vcli-ocr/SKILL.md` 提供模式选择、调用示例、JSON 字段和错误码说明，供 AI Agent 调用 code-vcli 时参考。
+- 图片本地处理不上传，无遥测。
+- 模型缓存位置：`~/.code-vcli/models/`
+- 工作区：`~/.code-vcli/` 或自定义路径
 
 ## 开发
 
@@ -122,7 +160,10 @@ Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输
 npm install
 npm run check    # 类型检查
 npm run build    # 编译到 dist/
+npm run build:skill-zip  # 生成 Skill 下载包
 ```
+
+要求 Node.js 22 或更高版本。
 
 ## 许可
 

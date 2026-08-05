@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skillRoot = path.join(root, ".trae", "skills", "code-vcli-ocr");
-const outputPath = path.join(root, "docs", "vcli-skills.zip");
+const skillRoot = path.join(root, ".trae", "skills", "code-vcli");
+const outputPath = path.join(root, "docs", "code-vcli-skills.zip");
 const includedRoots = ["SKILL.md"];
 const excludedNames = new Set(["node_modules", "__pycache__"]);
 
@@ -16,7 +16,7 @@ async function addEntry(entries, relativePath) {
   const absolutePath = path.join(skillRoot, relativePath);
   const children = await readdir(absolutePath, { withFileTypes: true }).catch(() => null);
   if (children === null) {
-    const archivePath = path.posix.join("vcli-ocr", ...relativePath.split(path.sep));
+    const archivePath = path.posix.join("code-vcli", ...relativePath.split(path.sep));
     entries[archivePath] = await readFile(absolutePath);
     return;
   }

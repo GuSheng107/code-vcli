@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f0edff" />
-    <meta name="description" content="下载 code-vcli-ocr Skill，通过 code-vcli CLI 对截图执行本地视觉识别与网页 UI 元素解析。为无视觉能力的 AI 模型提供 web 开发视觉能力。" />
-    <meta property="og:title" content="code-vcli-ocr Skill — AI 模型的 Web 开发视觉能力" />
+    <meta name="description" content="下载 code-vcli Skill，通过 vcli CLI 对截图执行本地视觉识别与网页 UI 元素解析。为无视觉能力的 AI 模型提供 web 开发视觉能力。" />
+    <meta property="og:title" content="code-vcli Skill — AI 模型的 Web 开发视觉能力" />
     <meta property="og:description" content="本地视觉识别，支持 PP-OCRv6 普通模式与 YOLO Web 模式。" />
     <meta property="og:type" content="website" />
     <title>Skills — code-vcli</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-    <link rel="stylesheet" href="./styles.css?v=20260805-2" />
-    <script src="./app.js?v=20260805-2" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=20260805-3" />
+    <script src="./app.js?v=20260805-3" defer></script>
   </head>
   <body class="skills-page">
     <header class="topbar">
@@ -33,7 +33,7 @@
         <div class="skill-orbit skill-orbit-two" aria-hidden="true"></div>
         <div class="skills-hero-inner">
           <span class="skill-eyebrow">CODE-VCLI SKILL</span>
-          <h1>安装 code-vcli-ocr<br /><em>视觉识别 Skill</em></h1>
+          <h1>安装 code-vcli<br /><em>视觉识别 Skill</em></h1>
           <p>让 AI 编码模型「看见」屏幕 — 本地截图转文本，支持普通 OCR 与网页 UI 元素解析。</p>
           <div class="skill-install-center">
             <div class="skill-quick-start">
@@ -41,12 +41,12 @@
               <p>请将下面的指令发给 Agent</p>
             </div>
             <div class="skill-agent-prompt">
-              <p id="skill-agent-prompt">请使用 <code>npm i code-vcli</code> 安装 CLI 并运行 <code>vcli init</code> 初始化视觉模型环境；从 <code>https://github.com/GuSheng107/code-vcli</code> 下载 <code>.trae/skills/code-vcli-ocr</code> 复制到项目的 <code>.trae/skills/</code> 目录；之后用 <code>vcli run ./image.png --json</code> 进行识别。</p>
+              <p id="skill-agent-prompt">请使用 <code>npx skills add GuSheng107/code-vcli --skill code-vcli -g</code> 安装该 Skill，并引导用户完成 <code>vcli init</code> 初始化；之后用 <code>vcli run ./image.png --json</code> 进行识别。</p>
               <button type="button" class="copy-btn" data-copy="skill-agent-prompt" aria-label="复制发给 Agent 的提示词">复制</button>
             </div>
-            <a class="download-skill" href="./vcli-skills.zip" download>
+            <a class="download-skill" href="./code-vcli-skills.zip" download>
               <span class="download-icon" aria-hidden="true">↓</span>
-              <span class="download-text"><strong>下载 ZIP</strong><small>包含 code-vcli-ocr Skill</small></span>
+              <span class="download-text"><strong>下载 ZIP</strong><small>包含 code-vcli Skill</small></span>
             </a>
           </div>
           <a class="ghost-link" href="#install-skill">查看两种安装方式</a>
@@ -103,18 +103,21 @@
           <div class="install-options">
             <div class="install-option-card">
               <span class="install-option-tag">方式一</span>
-              <h3>ZIP 安装</h3>
-              <p>下载后复制 <code>code-vcli-ocr</code> 文件夹到项目的 <code>.trae/skills/</code> 目录。</p>
-              <a class="download-skill download-skill-inline" href="./vcli-skills.zip" download>
-                <span class="download-icon" aria-hidden="true">↓</span>
-                <span class="download-text"><strong>下载 ZIP</strong><small>包含 code-vcli-ocr Skill</small></span>
-              </a>
+              <h3>npx 安装</h3>
+              <p>一行命令全局安装 Skill。</p>
+              <div class="command-syntax command-syntax-card">
+                <code id="skill-install-code-card">npx skills add GuSheng107/code-vcli --skill code-vcli -g</code>
+                <button type="button" class="copy-btn" data-copy="skill-install-code-card" aria-label="复制 npx 安装命令">复制</button>
+              </div>
             </div>
             <div class="install-option-card">
               <span class="install-option-tag">方式二</span>
-              <h3>Git 克隆</h3>
-              <p>从 GitHub 克隆仓库，复制 <code>.trae/skills/code-vcli-ocr</code> 到你的项目。</p>
-              <code>git clone https://github.com/GuSheng107/code-vcli.git</code>
+              <h3>ZIP 安装</h3>
+              <p>下载后复制 <code>code-vcli</code> 文件夹到项目的 <code>.trae/skills/</code> 目录。</p>
+              <a class="download-skill download-skill-inline" href="./code-vcli-skills.zip" download>
+                <span class="download-icon" aria-hidden="true">↓</span>
+                <span class="download-text"><strong>下载 ZIP</strong><small>包含 code-vcli Skill</small></span>
+              </a>
             </div>
           </div>
           <div class="install-next-step">
@@ -124,11 +127,11 @@
           </div>
           <div class="skill-structure">
             <h3>文件结构</h3>
-            <pre class="skill-tree"><code>code-vcli-ocr/
+            <pre class="skill-tree"><code>code-vcli/
 └── SKILL.md</code></pre>
           </div>
         </div>
-        <p class="skill-security">Skill 位置：<code>.trae/skills/code-vcli-ocr/SKILL.md</code>。模型缓存：<code>~/.code-vcli/models/</code>。工作区：<code>~/.code-vcli/</code> 或自定义路径。</p>
+        <p class="skill-security">Skill 位置：<code>.trae/skills/code-vcli/SKILL.md</code>。模型缓存：<code>~/.code-vcli/models/</code>。工作区：<code>~/.code-vcli/</code> 或自定义路径。</p>
       </section>
     </main>
 
