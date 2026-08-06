@@ -290,6 +290,15 @@ async function runRunCommand(
   const webMode = parsed.web;
   const mode = parsed.mode;
 
+  // --prompt 仅服务于 VLM / Mix：OCR 模式下不允许使用
+  if (parsed.prompt && mode === "ocr") {
+    throw new VcliError(
+      "INVALID_ARGUMENT",
+      "--prompt 仅用于 --vlm / --mix 模式（需要已安装 VLM 能力）。OCR 模式请勿携带该参数。",
+      2,
+    );
+  }
+
   // 能力门控：依据已安装的能力校验 --vlm/--mix
   const visionState = await stateStore.read();
   const capabilities: ComputeCapability = visionState?.capabilities ?? "ocr";
