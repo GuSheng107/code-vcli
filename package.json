@@ -22,7 +22,8 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "postinstall": "node scripts/postinstall.mjs",
     "prepack": "npm run build",
-    "build:skill-zip": "node scripts/build-skill-zip.mjs"
+    "build:skill-zip": "node scripts/build-skill-zip.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs && python tests/test_vcli_inference.py"
   },
   "keywords": [
     "vision",

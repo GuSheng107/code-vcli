@@ -1,231 +1,225 @@
 ---
 name: code-vcli
-description: 使用 vcli CLI 对截图/图片执行本地视觉识别与网页 UI 元素解析。当需要把屏幕截图、网页截图、文档图片转成文本、结构化 JSON 或进行视觉意图理解时使用。支持三条路线：OCR 模式（PP-OCRv6 + 可选 YOLO Web 检测）、VLM 模式（Qwen2.5-VL 视觉理解）、Mix 模式（先 OCR 再把文字注入 VLM）。
+description: 使用 vcli 为没有多模态能力的 AI Agent 提供本地视觉能力。适用于网页/UI 截图、文档图片、OCR、结构化坐标提取、Qwen2.5-VL 视觉理解，以及受 token 预算保护的 OCR+VLM Mix。
 ---
 
-# code-vcli — 为 AI 模型提供 Web 开发视觉能力
+# code-vcli
 
-`code-vcli` 是一个面向 AI 编码模型的本地视觉识别 CLI：把一张图片（截图、网页截图、文档扫描件）转成文本，可选输出适合 AI 读取的 JSON。支持纯 OCR、纯 VLM（Qwen2.5-VL 视觉理解与意图识别）与 Mix（OCR + VLM 顺序执行）三种模式。推理完全在本地进行，图片不会上传。
+`code-vcli` 把本地图片转换为文字、坐标、布局和视觉理解结果。图片不会上传，无遥测。
 
-## 前置条件
-
-- 已执行过 `vcli init`（首次使用会下载模型）。OCR 约 1-2 GB；VLM（Qwen2.5-VL 7B）另需约 8-16 GB，且需 GPU + 8GB 以上显存。
-- 若返回 `MODEL_NOT_INSTALLED`，则需要先运行 `vcli init`。
-- 升级 code-vcli 后再次运行 `vcli init` 会自动同步最新推理脚本到工作区，无需重新下载模型。
-- 支持 Node.js 22+ 与 Python 3.10+。
-
-## 安装与初始化
-
-首次使用需安装 CLI 并初始化视觉模型环境。Agent 在调用前应先确认 `vcli` 可用，必要时引导用户完成以下步骤：
+## 前置检查
 
 ```bash
-# 1. 安装 CLI（需要 Node.js 22+）
-npm i -g code-vcli
-
-# 2. 初始化视觉模型环境（创建 venv、选计算模式与能力、下载模型）
-vcli init
-
-# 跳过交互用默认值：
-vcli init --yes
-# 指定工作区路径：
-vcli init --yes --workspace "E:\code-vcli-data"
-
-# 3. 查看环境信息（含工作区路径、Python、模型状态、已装能力）
 vcli info
-
-# 4. 更新到最新版
-vcli update
 ```
 
-### 能力选择（init）
-
-初始化时按提示选择：
-
-- **计算模式**：`CPU`（仅 OCR）或 `GPU`（可装 OCR 和/或 VLM）。
-- **能力组合**（GPU 模式）：`仅 OCR` / `仅 VLM` / `都要`（`--mix` 需要两者）。
-- **OCR 放置**（GPU + 含 OCR 时）：OCR 跑 `CPU` 还是 `GPU`，推荐 CPU 省显存给 VLM。
-- **VLM 量化**（含 VLM 时）：根据显存自动推荐 `BF16`（16GB+）或 `AWQ INT4`（8-15GB），需确认。
-
-已安装环境再次运行 `vcli init` 会先询问是否卸载现有能力：输入 `n`（默认）保留现有安装，仅增量增补/调整能力（例如为「仅 OCR」增加 VLM）；输入 `y` 则卸载后全新安装。
-
-## 工作区与截图管理
-
-`vcli init` 会创建工作区（默认 `~/.code-vcli/`，可用 `--workspace <path>` 自定义），并在其中创建 `files/` 文件夹用于存放截图。
-
-```text
-~/.code-vcli/              工作区（默认，可用 vcli info 查看）
-├── files/                 截图存放目录（init 时自动创建）
-├── models/                模型权重
-├── venv/                  Python 虚拟环境
-└── state.json             状态文件
-```
-
-> 建议引导用户把待识别的截图统一放到 `files/` 文件夹，方便集中管理与复用。通过 `vcli info` 可查看当前工作区路径。
-
-调用时直接引用 `files/` 下的文件：
+若未初始化或返回 `MODEL_NOT_INSTALLED`：
 
 ```bash
-vcli run ~/.code-vcli/files/login.png --web --json
+vcli init
 ```
 
-## 模式选择准则
+要求 Node.js 22+、Python 3.10+。VLM 需要 GPU；OCR 可使用 CPU 或 GPU。
 
-| 场景 | 模式 | 命令 |
-| --- | --- | --- |
-| 网页 / UI 截图（需要定位按钮、输入框、卡片等元素） | `--web`（OCR 模式） | `vcli run ./webpage.png --web --json` |
-| 普通文档 / 扫描件 / 纯文字图片 | `--ocr`（默认） | `vcli run ./image.png --json` |
-| 需要视觉理解与意图识别（看懂画面含义、回答关于图片的问题） | `--vlm` | `vcli run ./image.png --vlm` |
-| 既要定位又要理解（先 OCR 再注入 VLM，先定位再理解） | `--mix` | `vcli run ./image.png --mix` |
-| 不确定图片类型 | 先向用户确认是「网页/UI」还是「普通文档」再选择 | — |
+## 初始化
 
-> OCR 模式：普通模式只做整图 OCR，速度快、带坐标；Web 模式额外运行 YOLO 检测 UI 元素位置，并把文字合并到元素上，适合网页/界面截图。Web 模式下，空文本且置信度低于 `--min-confidence`（默认 0.55）的 UI 误检会自动丢弃。
->
-> VLM / Mix 模式：需要 GPU 模式且已安装 VLM 能力（`--mix` 还需 OCR）。`--vlm` 返回结构化的意图识别 JSON（含 `intent` / `summary` / `elements`）；`--mix` 会先做 OCR 把文字注入 VLM，适合既有文字又有布局理解的场景。
-
-## 调用示例
+交互初始化会选择计算模式、能力、OCR 后端和 VLM 模型：
 
 ```bash
-# OCR 模式，输出纯文本
-vcli run ./image.png
-
-# OCR 模式，输出 JSON（AI 调用建议始终加 --json）
-vcli run ./image.png --json
-
-# Web 模式（网页/UI 截图）
-vcli run ./webpage.png --web
-
-# Web 模式 + JSON
-vcli run ./webpage.png --web --json
-
-# VLM 模式（视觉理解与意图识别，需已装 VLM 能力）
-vcli run ./image.png --vlm --json
-
-# Mix 模式（先 OCR 再注入 VLM，需已装 both）
-vcli run ./webpage.png --mix --json
-
-# VLM/Mix 自定义问题
-vcli run ./image.png --vlm -p "这张页面主要的操作是什么？"
+vcli init
 ```
 
-## 参数说明（run）
+非交互示例：
 
-| 参数 | 说明 |
+```bash
+# GPU + OCR/VLM + CPU OCR + B2
+vcli init --yes --compute gpu --capabilities both --ocr-backend cpu --vlm-option B2
+
+# GPU + OCR/VLM + GPU OCR + B2
+vcli init --yes --compute gpu --capabilities both --ocr-backend gpu --vlm-option B2
+```
+
+允许的 VLM 选项只有：
+
+| ID | 模型 | 建议显存 | 平台 |
+| --- | --- | --- | --- |
+| A1 | Qwen2.5-VL 3B BF16 | 8GB+ | NVIDIA / Apple MPS / AMD ROCm |
+| A2 | Qwen2.5-VL 3B AWQ INT4 | 4GB+ | Windows/Linux NVIDIA |
+| B1 | Qwen2.5-VL 7B BF16 | 16GB+ | NVIDIA / Apple MPS / AMD ROCm |
+| B2 | Qwen2.5-VL 7B AWQ INT4 | 8GB+ | Windows/Linux NVIDIA |
+| C1 | Qwen2.5-VL 32B BF16 | 72GB+ | NVIDIA / Apple MPS / AMD ROCm |
+| C2 | Qwen2.5-VL 32B AWQ INT4 | 24GB+ | Windows/Linux NVIDIA |
+
+显存不足时 CLI 会警告并要求确认；平台不兼容时会在下载前停止。拒绝推荐型号后会显示完整六项菜单，不会直接退出。
+
+## 模式选择
+
+| 场景 | 推荐模式 |
 | --- | --- |
-| `<image>` | 图片路径（必填）。支持 png / jpg / jpeg / webp / bmp / tiff / tif，上限 20 MB |
-| `--ocr <ppocrv6>` | OCR 引擎，默认 `ppocrv6` |
-| `--vlm` | 使用 VLM 视觉理解（Qwen2.5-VL，需已装 VLM 能力） |
-| `--mix` | OCR + VLM 顺序执行，先 OCR 再把文字注入 VLM（需已装 both） |
-| `-p, --prompt <text>` | VLM/`--mix` 模式自定义问题（默认有内置模板） |
-| `-w, --web` | 启用 YOLO UI 元素检测（OCR 模式下的网页/UI 场景） |
-| `--json` | 输出适合 AI 读取的 JSON |
-| `--timeout <seconds>` | 本次推理超时（秒） |
-| `--min-confidence <0~1>` | 空 UI 元素保留阈值（默认 0.55，仅 `--web` 生效）。空文本且置信度低于该值的 YOLO 误检自动丢弃 |
+| 只需要准确文字 | OCR：`vcli run image.png --json` |
+| 网页按钮、卡片、表格和坐标 | OCR Web：`vcli run page.png --web --json` |
+| 需要直接理解图片含义 | VLM：`vcli run image.png --vlm --json` |
+| 同时需要 OCR 定位和视觉理解 | Mix：`vcli run image.png --mix --json` |
+| 超长网页/表格（可能数万到十万字符） | 两阶段工作流，见下文 |
 
-## JSON 输出字段
+## 常用命令
+
+```bash
+# 普通 OCR
+vcli run ./document.png --json
+
+# 网页 OCR + YOLO + 紧凑布局
+vcli run ./page.png --web --json
+
+# 纯 VLM
+vcli run ./page.png --vlm --json
+
+# CPU OCR -> 释放资源 -> GPU VLM
+vcli run ./page.png --mix --ocr-backend cpu --json
+
+# GPU OCR -> 清理显存 -> GPU VLM
+vcli run ./page.png --mix --ocr-backend gpu --json
+
+# 自定义问题
+vcli run ./page.png --vlm -p "页面的主要操作和异常状态是什么？" --json
+
+# 调整 Mix OCR token 预算
+vcli run ./page.png --mix --mix-ocr-context-tokens 8192 --json
+
+# 禁止向 VLM 注入 OCR，但仍生成 OCR artifact
+vcli run ./page.png --mix --mix-ocr-context-tokens 0 --json
+```
+
+## 超长 OCR 的 Agent 工作流
+
+不要把完整 OCR JSON 直接复制进提示词。Mix 默认最多注入 16,384 OCR tokens，上限 32,768，并执行：
+
+- 相同文字/位置去重；
+- 坐标压缩为百分比；
+- 页面首尾保留；
+- 九宫格空间抽样；
+- 金额、日期、数字、短 UI 标签优先；
+- 单项长文本截断；
+- 达到预算后停止。
+
+对于十万字符级页面，优先使用两阶段调用：
+
+```bash
+# 第一步：生成完整 OCR JSON
+vcli run ./large-page.png --web --json
+
+# Agent 只读取与任务相关的字段/区段，然后构造简短问题
+vcli run ./large-page.png --vlm \
+  -p "根据我关注的表格行，确认其对应按钮、状态颜色和页面意图" \
+  --json
+```
+
+不要因为 OCR 文件很大就整文件载入 Agent 上下文。先读取 `text` 或检索关键字，需要坐标时再读取相关 `items`。
+
+## Mix artifact
+
+Mix 的主输出会提供：
 
 ```json
 {
-  "text": "登录\nuser@example.com",
-  "items": [
-    {
-      "text": "登录",
-      "bbox": [10, 20, 60, 40],
-      "type": "ui_text",
-      "geometry": {"aspect": 2.5, "region": "top-right"},
-      "cluster": {"id": 0, "size": 5, "arrangement": "horizontal", "region": "top"}
-    }
-  ],
-  "layout": {
-    "img_size": [1920, 1080],
-    "item_count": 12,
-    "patterns": {
-      "has_top_nav": true,
-      "has_form": false,
-      "has_grid": false,
-      "has_sidebar": false,
-      "has_footer": false
+  "text": "VLM summary",
+  "engine": "ppocrv6-cpu+qwen2.5-vl-b2",
+  "mode": "mix",
+  "items": [],
+  "ocr": {
+    "itemCount": 5000,
+    "inlineItemCount": 80,
+    "itemsTruncated": true,
+    "artifacts": {
+      "text": "..._ocr.txt",
+      "items": "..._ocr_items.json"
     },
-    "cluster_summary": [
-      {"id": 0, "size": 5, "arrangement": "horizontal", "region": "top"}
+    "context": {
+      "includedItems": 600,
+      "omittedItems": 4400,
+      "injectedTokens": 16370,
+      "tokenBudget": 16384,
+      "truncated": true,
+      "strategy": "spatial-priority-token-budget-v1"
+    }
+  }
+}
+```
+
+- `*_ocr.txt`：完整线性文字，适合先阅读/搜索。
+- `*_ocr_items.json`：完整文字框、坐标、页面布局。
+- `*_output.json`：VLM 结果、有限预览和 artifact 路径。
+
+## OCR/Web JSON
+
+普通 OCR 项只保留重要字段：
+
+```json
+{"text":"登录","bbox":[10,20,60,40]}
+```
+
+Web 项：
+
+```json
+{
+  "text":"Export CSV",
+  "bbox":[1185,41,1387,96],
+  "type":"ui_text",
+  "region":"top-right",
+  "cluster_id":1
+}
+```
+
+页面级重复信息集中在：
+
+```json
+{
+  "layout": {
+    "img_size":[1440,1000],
+    "item_count":39,
+    "patterns":{"has_sidebar":true,"has_grid":true},
+    "cluster_summary":[
+      {"id":1,"size":5,"arrangement":"vertical","region":"top-right"}
     ]
   }
 }
 ```
 
-| 顶层字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `text` | string | 全文识别结果，各项用 `\n` 连接 |
-| `items` | array | 识别项数组 |
-| `layout` | object | 仅 Web 模式：页面级布局分析（聚类、页面模式），用于辅助 LLM 推断意图，详见下方说明 |
+`bbox` 已足够推导宽高比，因此不再为每项重复输出 `geometry.aspect`；组大小、排列和区域也不再重复嵌套在每个 item 中。
 
-`items[]` 结构：
+## 参数
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `text` | string | 该项文字；Web 模式下为 UI 元素内合并后的文字 |
-| `bbox` | array | 轴对齐矩形 `[x1, y1, x2, y2]` |
-| `type` | string | 仅 Web 模式：`ui_element`（无文字的元素）\| `ui_text`（含文字的 UI 元素） |
-| `geometry` | object | 仅 Web 模式：几何特征（宽高比、九宫格区域），语言无关 |
-| `cluster` | object | 仅 Web 模式：所属空间聚类信息（组内元素数、排列方式、区域） |
-
-### 布局分析说明（仅 Web 模式）
-
-`layout.patterns` 字段提供页面级结构线索，完全基于空间关系，**语言无关**：
-
-| 模式 | 含义 |
-| --- | --- |
-| `has_top_nav` | 顶部有横向排列的导航栏 |
-| `has_form` | 中心区域有纵向排列的表单 |
-| `has_grid` | 有网格状排列的卡片/图标 |
-| `has_sidebar` | 左侧有纵向侧边栏 |
-| `has_footer` | 底部有横向页脚 |
-
-`items[].geometry` 提供单元素几何特征：`region` 为九宫格区域（top-left / top-center / top-right / center / bottom-left 等），`aspect` 为宽高比（>8 多为输入框或按钮，<1.2 多为图标）。
-
-> LLM 结合 `geometry` + `cluster` + `layout.patterns` 可推断元素意图（如 `cluster` 为 form 区域 + `geometry.aspect` > 8 → 输入框；`cluster` 为 top nav + `type` 为 ui_text → 导航按钮），无需硬编码关键词。
-
-### VLM / Mix 模式输出（--vlm / --mix）
-
-VLM 与 Mix 模式在 OCR 字段基础上追加视觉理解字段：
-
-| 顶层字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `intent` | string | VLM 推断的页面/图片意图（如 `login` / `register` / `dashboard`） |
-| `summary` | string | VLM 对画面内容的自然语言总结 |
-| `elements` | array | VLM 识别出的关键 UI 元素/操作点 |
-| `raw` | string | VLM 原始输出文本 |
-| `engine` | string | 使用的引擎（`ocr` / `vlm` / `mix`） |
-
-> Mix 模式会先执行 OCR 提取文字，再把文字注入 VLM，使其既有坐标定位又有画面理解；`--prompt` 可自定义问题。需要 GPU 模式且已安装对应能力。
-
-## 错误码对照表
-
-失败时走 stderr，非零退出码，JSON 输出形如：
-
-```json
-{"ok": false, "error": {"code": "MODEL_TEXT_EMPTY", "message": "未识别到文字"}}
+```text
+--vlm                           纯 VLM
+--mix                           OCR + VLM 顺序执行
+--web                           网页/UI YOLO 检测
+--json                          保存紧凑 JSON，stdout 仅返回文件路径
+-p, --prompt <text>             VLM/Mix 问题
+--ocr-backend <cpu|gpu>         本次 OCR/Mix 覆盖后端
+--mix-ocr-context-tokens <N>    0~32768，默认 16384
+--timeout <seconds>             推理超时
+--min-confidence <0~1>          空 UI 元素阈值
 ```
 
-| 错误码 | 含义 | 处理建议 |
-| --- | --- | --- |
-| `MODEL_NOT_INSTALLED` | 视觉模型未安装 | 先运行 `vcli init` |
-| `MODEL_TEXT_EMPTY` | 图片中未识别到文字 | 换一张更清晰的图片，或确认是否误用 Web 模式 |
-| `IMAGE_READ_ERROR` | 无法访问图片 / 路径不存在 | 检查文件路径 |
-| `IMAGE_FORMAT_UNSUPPORTED` | 不支持的图片格式 | 使用 png/jpg/webp/bmp/tiff |
-| `IMAGE_TOO_LARGE` | 图片超过 20 MB | 压缩后重试 |
-| `MODEL_RUNTIME_MISSING` | Python 运行时或推理脚本丢失 | 重新运行 `vcli init` |
-| `MODEL_INITIALIZATION_FAILED` | 模型初始化/下载失败 | 重新运行 `vcli init`，检查网络 |
-| `MODEL_RECOGNITION_FAILED` | 推理失败 / 超时 / 输出解析失败 | 可加 `--timeout`，或重试 |
-| `INVALID_ARGUMENT` | 参数错误 | 检查命令与参数 |
-| `CANCELLED` | 用户取消 | 无需处理 |
+支持 png/jpg/jpeg/webp/bmp/tiff/tif，单文件上限 20MB。
 
-## 其他命令
+## Agent 调用规则
 
-| 命令 | 说明 |
+1. 默认带 `--json`，读取 stdout 返回的文件路径。
+2. 不要把 stderr 进度日志当作结果。
+3. 只需要文字时不要调用 VLM。
+4. 需要颜色、图形关系、页面意图时使用 VLM。
+5. Mix 已自动限制 OCR token，但超长页面仍优先使用两阶段工作流。
+6. `raw` 只在 VLM 无法解析结构化 JSON 时出现；正常输出不会重复保存原回答。
+7. 若模式能力缺失，运行 `vcli init` 增补，不要删除整个工作区。
+
+## 常见错误
+
+| 错误码 | 处理 |
 | --- | --- |
-| `vcli init [--yes] [--workspace <path>]` | 初始化视觉模型环境（工作区 + venv + 模型下载） |
-| `vcli info` | 显示环境信息（Python / 模型 / 状态） |
-| `vcli update` | 更新到最新版 |
-| `vcli install [--force]` | 安装到用户目录并加入 PATH |
-| `vcli version [--check]` | 查看版本 |
-| `vcli help` | 查看帮助 |
+| `MODEL_NOT_INSTALLED` | 运行 `vcli init` |
+| `MODEL_CAPABILITY_MISSING` | 初始化并选择所需能力 |
+| `MODEL_INITIALIZATION_FAILED` | 检查平台、显存、网络和模型文件 |
+| `MODEL_RECOGNITION_FAILED` | 增大 `--timeout`，检查显存 |
+| `MODEL_TEXT_EMPTY` | 换清晰图片或改用 VLM |
+| `INVALID_ARGUMENT` | 检查互斥模式与参数范围 |

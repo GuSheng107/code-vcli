@@ -4,7 +4,7 @@ AI 编码模型（如 GLM、DeepSeek、Qwen-max）能写代码，但**无法「�
 
 `code-vcli` 给它们一双眼睛：把截图 / 网页截图 / 文档图片转成结构化文本和 JSON，让没有视觉能力的模型也能看懂 UI 布局、按钮位置、卡片结构，准确完成 web 开发任务。
 
-支持三条识别路线：**纯 OCR**（PP-OCRv6）、**纯 VLM**（Qwen2.5-VL 视觉理解与意图识别）、**OCR + VLM 混合**（先 OCR 再把文字注入 VLM，先定位再理解）。推理在本地完成，图片不上传。
+支持三条识别路线：**纯 OCR**（PP-OCRv6）、**纯 VLM**（Qwen2.5-VL 视觉理解）、**OCR + VLM Mix**（OCR 与 VLM 顺序执行）。Mix 不会把无限长度的 OCR JSON 原样塞给 VLM，而是按 token 预算去重、空间采样和压缩；完整 OCR 文字、坐标与布局另存为 artifact，供 Agent 按需读取。推理在本地完成，图片不上传。
 
 文档站：https://gusheng107.github.io/code-vcli/
 
@@ -66,14 +66,16 @@ vcli init
 
 - **计算模式**：`CPU`（仅 OCR）或 `GPU`（可装 OCR 和/或 VLM）。
 - **能力组合**（GPU 模式）：`仅 OCR` / `仅 VLM` / `都要`（`--mix` 需要两者）。
-- **OCR 放置**（GPU + 含 OCR 时）：OCR 跑 `CPU` 还是 `GPU`，推荐 CPU 省显存给 VLM。
-- **VLM 量化**（含 VLM 时）：根据显存自动推荐 `BF16`（16GB+）或 `AWQ INT4`（8-15GB），需确认。
+- **OCR 放置**（GPU + 含 OCR 时）：默认选择 CPU 或 GPU；运行时也可通过 `--ocr-backend` 临时覆盖。Mix 会在 OCR 完成后释放其资源，再加载 VLM。
+- **VLM 模型**：项目只允许 A1、A2、B1、B2、C1、C2 六个官方组合。系统按显存与平台推荐；选择超出显存建议的型号会警告并要求确认。Apple MPS 与 AMD ROCm 使用 BF16，AWQ 仅支持 Windows/Linux NVIDIA CUDA。
 
 跳过交互用默认值：
 
 ```bash
 vcli init --yes
 vcli init --yes --workspace "E:\code-vcli-data"
+# 明确安装 GPU + OCR/VLM + GPU OCR + B2
+vcli init --yes --compute gpu --capabilities both --ocr-backend gpu --vlm-option B2
 ```
 
 > 已安装环境再次运行 `vcli init` 会先询问是否卸载现有能力：输入 `n`（默认）保留现有安装，仅增量增补/调整能力（例如为「仅 OCR」增加 VLM）；输入 `y` 则卸载后全新安装。系统自动对比差异，只下载新增模型、复用 venv/PyTorch 等共同依赖。
@@ -96,7 +98,10 @@ vcli run ./image.png              # OCR 模式：整图 OCR（PP-OCRv6）
 vcli run ./screenshot.png --web   # OCR + Web：网页截图，叠加 YOLO 元素检测
 vcli run ./image.png --json       # JSON 输出（自动保存到工作区 files/，返回文件路径）
 vcli run ./webpage.png --vlm      # VLM 模式：Qwen2.5-VL 视觉理解与意图识别（需已装 VLM）
-vcli run ./webpage.png --mix      # Mix 模式：先 OCR 再把文字注入 VLM（需已装 both）
+vcli run ./webpage.png --mix      # Mix：OCR 后释放资源，再加载 VLM
+vcli run ./webpage.png --mix --ocr-backend cpu   # CPU OCR + GPU VLM
+vcli run ./webpage.png --mix --ocr-backend gpu   # GPU OCR + GPU VLM
+vcli run ./webpage.png --mix --mix-ocr-context-tokens 8192
 vcli run ./image.png --vlm -p "这张页面主要的操作是什么？"
 vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下的截图
 ```
@@ -107,7 +112,7 @@ vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下�
 | --- | --- | --- |
 | `--ocr`（默认） | 纯 OCR，PP-OCRv6，可选 `--web` | `vcli run ./image.png` |
 | `--vlm` | 纯 VLM 视觉理解与意图识别，返回 JSON 意图 | `vcli run ./image.png --vlm` |
-| `--mix` | 先 OCR 再注入 VLM，先定位再理解 | `vcli run ./image.png --mix` |
+| `--mix` | OCR 与 VLM 顺序执行；OCR 上下文受 token 预算约束，完整结果另存 artifact | `vcli run ./image.png --mix` |
 
 > `--vlm` / `--mix` 需要 GPU 模式且已安装 VLM 能力（`--mix` 还需 OCR）。未安装时会在初始化界面选择对应能力后使用。
 
@@ -119,6 +124,24 @@ vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下�
 vcli run ./webpage.png --web --json
 ```
 
+### 超长网页、表格与文档
+
+Mix 默认最多向 VLM 注入 16,384 个 OCR tokens，上限 32,768。压缩过程保留页面首尾、九宫格空间覆盖、金额/日期/数字、UI 标签等高价值项，并输出 `ocr.context` 统计。完整数据拆为：
+
+- `*_ocr.txt`：完整线性文字，适合 Agent 先快速阅读；
+- `*_ocr_items.json`：完整文字框、坐标和布局；
+- `*_output.json`：VLM 结果、有限 OCR 预览、artifact 路径和压缩统计。
+
+十万字符级页面使用两阶段调用：
+
+```bash
+vcli run ./page.png --json
+# Agent 读取 OCR JSON 中必要部分后，构造针对性问题
+vcli run ./page.png --vlm -p "结合我提取的关键字段，判断页面的主要操作和异常状态"
+```
+
+也可用 `--mix-ocr-context-tokens 0` 禁止 Mix 自动注入 OCR，仅保留 OCR artifact 与图像理解。
+
 输出示例：
 
 ```json
@@ -129,8 +152,8 @@ vcli run ./webpage.png --web --json
       "text": "登录",
       "bbox": [10, 20, 60, 40],
       "type": "ui_text",
-      "geometry": {"aspect": 2.5, "region": "top-center"},
-      "cluster": {"id": 0, "size": 3, "arrangement": "vertical", "region": "center"}
+      "region": "top-center",
+      "cluster_id": 0
     }
   ],
   "layout": {
@@ -144,7 +167,7 @@ vcli run ./webpage.png --web --json
 }
 ```
 
-Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位按钮、输入框、卡片等 UI 元素，通过 IoU、中心点距离、面积比把文字归到对应元素上，最后按位置排序输出。空文本且置信度低于 `--min-confidence`（默认 0.55）的 UI 误检会自动丢弃。
+Web 模式原理：先用 PP-OCRv6 全图识字，再用 YOLO 定位 UI 元素，通过 IoU、中心点距离、面积比把文字归入元素。输出会去除重复 OCR 框、低置信空元素和可由 `bbox` 推导的冗余字段；每项仅保留 `text`、`bbox`、`type`、`region`、`cluster_id`，组排列信息集中在 `layout.cluster_summary`。
 
 ## AI Agent Skill
 
@@ -163,7 +186,7 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 | 命令 | 说明 |
 | --- | --- |
 | `vcli` | 交互界面 |
-| `vcli init [--yes] [--workspace <path>] [--reset-workspace]` | 初始化环境 |
+| `vcli init [options]` | 初始化环境；支持计算模式、能力、OCR 后端和 A1-C2 VLM 选项 |
 | `vcli run <image> [options]` | 识别图片 |
 | `vcli info` | 环境信息 |
 | `vcli update` | 更新到最新版 |
@@ -171,27 +194,52 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 | `vcli version [--check]` | 版本信息 |
 | `vcli help` | 帮助 |
 
+`init` 关键参数：
+
+```text
+--yes                         跳过交互，使用默认/显式值
+--workspace <path>            工作区
+--compute <cpu|gpu>           计算模式
+--capabilities <ocr|vlm|both> 能力组合
+--ocr-backend <cpu|gpu>       默认 OCR 后端
+--vlm-option <A1..C2>         VLM 官方模型组合
+```
+
 `run` 参数：
 
 ```text
 <image>                    图片路径（必填）
     --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
-    --vlm                  使用 VLM 视觉理解（Qwen2.5-VL，需已装 VLM 能力）
-    --mix                  OCR + VLM 顺序执行，先 OCR 再注入（需已装 both）
--p, --prompt <text>        VLM/--mix 模式自定义问题（默认有内置模板）
+    --vlm                  使用 VLM 视觉理解
+    --mix                  OCR + VLM 顺序执行（需已装 both）
+-p, --prompt <text>        VLM/Mix 自定义问题
 -w, --web                  网页/UI 场景
-    --json                 输出 AI 可读的 JSON（自动保存到工作区 files/）
+    --json                 输出紧凑 JSON 并返回文件路径
     --timeout <seconds>    推理超时
-    --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
+    --min-confidence <0~1> 空 UI 元素保留阈值
+    --ocr-backend <cpu|gpu> 本次 OCR/Mix 覆盖 OCR 位置
+    --mix-ocr-context-tokens <0~32768> Mix OCR token 预算（默认 16384）
 ```
 
 支持 `png` / `jpg` / `jpeg` / `webp` / `bmp` / `tiff` / `tif`，上限 20 MB。
 
 ## 模型
 
-- PP-OCRv6（RapidOCR + OpenVINO）：整图 OCR，速度快，带坐标
-- OmniParser V2 YOLO：UI 元素检测（`--web` 启用）
-- Qwen2.5-VL 7B（transformers）：VLM 视觉理解与意图识别（`--vlm` / `--mix` 启用，需 GPU）。显存 16GB+ 用 BF16，8-15GB 用 AWQ INT4
+- PP-OCRv6：CPU 使用 OpenVINO，GPU 使用 RapidOCR Torch CUDA/MPS；两套模型可与 GPU VLM 顺序配合。
+- OmniParser V2 YOLO：UI 元素检测（`--web` 启用）。
+
+VLM 仅允许以下官方组合：
+
+| ID | 模型 | 建议显存 | 说明 |
+| --- | --- | --- | --- |
+| A1 | Qwen2.5-VL 3B BF16 | 8GB+ | 小模型原生精度 |
+| A2 | Qwen2.5-VL 3B AWQ INT4 | 4GB+ | 最省显存，仅 NVIDIA CUDA |
+| B1 | Qwen2.5-VL 7B BF16 | 16GB+ | 7B 原生精度 |
+| B2 | Qwen2.5-VL 7B AWQ INT4 | 8GB+ | 16GB NVIDIA GPU 推荐 |
+| C1 | Qwen2.5-VL 32B BF16 | 72GB+ | 32B 原生精度 |
+| C2 | Qwen2.5-VL 32B AWQ INT4 | 24GB+ | 高显存 NVIDIA CUDA |
+
+Apple MPS 与 AMD ROCm 只支持 BF16（A1/B1/C1）；AWQ 仅支持 Windows/Linux NVIDIA CUDA。显存不足会警告并由用户确认，平台不兼容则在下载前停止。
 
 ## 隐私和安全
 
@@ -210,7 +258,7 @@ npm run build:skill-zip  # 生成 Skill 下载包
 
 要求 Node.js 22 或更高版本。
 
-Web 模式额外输出布局分析信息（`layout` 页面模式 + `geometry`/`cluster`/`relations`/`text_features` 每个元素的结构线索），供 LLM 推断元素意图，语言无关。详见 [skills/code-vcli/SKILL.md](skills/code-vcli/SKILL.md)。
+Web 模式输出紧凑布局信息：页面级 `layout.patterns` / `cluster_summary`，元素级 `region` / `cluster_id`。Mix 另输出 OCR artifact 与 token 压缩统计。详见 [skills/code-vcli/SKILL.md](skills/code-vcli/SKILL.md)。
 
 ## 许可
 

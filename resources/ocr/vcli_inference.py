@@ -24,7 +24,9 @@ import gc
 import json
 import os
 import re
+import shutil
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"awq(\.|$)")
+warnings.filterwarnings("ignore", message=r"Using padding='same' with even kernel lengths.*")
 
 
 # ---------------------------------------------------------------------------
@@ -65,10 +69,17 @@ PPOCR_MODEL_DISPLAY = "PP-OCRv6 (RapidOCR + OpenVINO)"
 YOLO_MODEL_DISPLAY = "OmniParser V2 YOLO"
 VLM_MODEL_DISPLAY = "Qwen2.5-VL 7B (transformers)"
 
-# VLM 模型仓库
-VLM_REPO = "Qwen/Qwen2.5-VL-7B-Instruct"
-VLM_AWQ_REPO = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+# VLM 仅允许六个官方选项：3B/7B/32B × BF16/AWQ。
+VLM_OPTIONS: dict[str, dict[str, str]] = {
+    "A1": {"repo": "Qwen/Qwen2.5-VL-3B-Instruct", "label": "Qwen2.5-VL 3B BF16"},
+    "A2": {"repo": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ", "label": "Qwen2.5-VL 3B AWQ INT4"},
+    "B1": {"repo": "Qwen/Qwen2.5-VL-7B-Instruct", "label": "Qwen2.5-VL 7B BF16"},
+    "B2": {"repo": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ", "label": "Qwen2.5-VL 7B AWQ INT4"},
+    "C1": {"repo": "Qwen/Qwen2.5-VL-32B-Instruct", "label": "Qwen2.5-VL 32B BF16"},
+    "C2": {"repo": "Qwen/Qwen2.5-VL-32B-Instruct-AWQ", "label": "Qwen2.5-VL 32B AWQ INT4"},
+}
 VLM_DIR = MODELS_DIR / "vlm"
+VLM_OPTION_FILE = VLM_DIR / ".vcli-model-option"
 
 # VLM 默认 / 模式默认 prompt
 VLM_DEFAULT_PROMPT = "描述这张截图的内容、布局和用户意图"
@@ -94,6 +105,7 @@ CENTER_DIST_THRESHOLD = 50
 MAX_AREA_RATIO = 2.5
 # UI 元素最小面积（像素），过小的图标不吞文字
 MIN_UI_AREA = 500
+MAX_EMPTY_UI_ITEMS = 100
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +132,17 @@ def get_device() -> str:
         import torch  # type: ignore[import-untyped]
     except ImportError:
         return "cpu"
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def ensure_accelerator_available() -> None:
+    device = get_device()
+    if device == "cpu":
+        raise RuntimeError("当前安装要求 GPU 推理，但 PyTorch 未检测到 CUDA/MPS/ROCm 加速设备")
 
 
 def download_snapshot(repo_id: str, local_dir: Path, allow_patterns: list[str] | None = None) -> str:
@@ -137,23 +159,57 @@ def download_snapshot(repo_id: str, local_dir: Path, allow_patterns: list[str] |
         return snapshot_download(repo_id=repo_id, local_dir=str(local_dir), allow_patterns=allow_patterns)
 
 
-def init_ppocr_models() -> None:
+def build_ppocr_params(backend: str) -> dict[str, Any]:
+    from rapidocr.utils.typings import EngineType  # type: ignore[import-untyped]
+
+    if backend == "gpu":
+        device = get_device()
+        if device == "cpu":
+            raise RuntimeError("OCR 选择了 GPU，但 PyTorch 未检测到可用加速设备")
+        engine = EngineType.TORCH
+        return {
+            # RapidOCR 3.9.2 的 Torch 引擎会直接用 / 拼接路径，必须传 Path 对象。
+            "Global.model_root_dir": PPOCR_DIR,
+            "Det.engine_type": engine,
+            "Cls.engine_type": engine,
+            "Rec.engine_type": engine,
+            "EngineConfig.torch.use_cuda": device == "cuda",
+            "EngineConfig.torch.use_mps": device == "mps",
+        }
+
+    engine = EngineType.OPENVINO
+    return {
+        "Global.model_root_dir": str(PPOCR_DIR),
+        "Det.engine_type": engine,
+        "Cls.engine_type": engine,
+        "Rec.engine_type": engine,
+    }
+
+
+def init_ppocr_models(backend: str = "cpu") -> None:
     try:
         from rapidocr import RapidOCR  # type: ignore[import-untyped]
-        from rapidocr.utils.typings import EngineType  # type: ignore[import-untyped]
-        log("初始化 PP-OCRv6（下载其模型）…")
+        log(f"初始化 PP-OCRv6（backend={backend}，下载其模型）…")
         PPOCR_DIR.mkdir(parents=True, exist_ok=True)
-        engine = EngineType.OPENVINO
-        RapidOCR(params={"Global.model_root_dir": str(PPOCR_DIR),
-                         "Det.engine_type": engine,
-                         "Cls.engine_type": engine,
-                         "Rec.engine_type": engine})
+        RapidOCR(params=build_ppocr_params(backend))
         log("PP-OCRv6 模型就绪")
     except Exception as exc:
         log(f"PP-OCRv6 预下载失败（将在使用时重试）：{exc}")
 
 
-def download_all_models(compute: str = "both", quant: str = "bf16") -> None:
+def get_installed_vlm_option() -> str | None:
+    try:
+        option = VLM_OPTION_FILE.read_text(encoding="utf-8").strip().upper()
+        return option if option in VLM_OPTIONS else None
+    except OSError:
+        return None
+
+
+def download_all_models(
+    compute: str = "both",
+    vlm_option: str = "B2",
+    ocr_backend: str = "cpu",
+) -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     want_ocr = compute in ("ocr", "both")
     want_vlm = compute in ("vlm", "both")
@@ -161,11 +217,17 @@ def download_all_models(compute: str = "both", quant: str = "bf16") -> None:
     if want_ocr:
         log("== 开始下载 OmniParser YOLO ==")
         download_snapshot(OMNIPARSER_REPO, OMNIPARSER_DIR, allow_patterns=["icon_detect/model.pt"])
-        log("== 开始下载 PP-OCRv6 ==")
-        init_ppocr_models()
+        log("== 开始下载 PP-OCRv6 CPU 模型 ==")
+        init_ppocr_models("cpu")
+        if ocr_backend == "gpu":
+            log("== 开始下载 PP-OCRv6 GPU 模型 ==")
+            init_ppocr_models("gpu")
     if want_vlm:
-        log(f"== 开始下载 {VLM_MODEL_DISPLAY}（{quant}） ==")
-        download_vlm(quant)
+        option = vlm_option.upper()
+        if option not in VLM_OPTIONS:
+            raise ValueError("VLM 选项仅支持 A1、A2、B1、B2、C1、C2")
+        log(f"== 开始下载 {VLM_OPTIONS[option]['label']} ==")
+        download_vlm(option)
 
     missing = verify_model_integrity(compute)
     if missing:
@@ -176,11 +238,20 @@ def download_all_models(compute: str = "both", quant: str = "bf16") -> None:
     log("== 全部模型下载完成 ==")
 
 
-def download_vlm(quant: str = "bf16") -> None:
-    """下载对应量化版本的 VLM 权重。awq 取 AWQ 量化仓库，否则下载 BF16 全量权重。"""
+def download_vlm(vlm_option: str = "B2") -> None:
+    """下载 A1-A2/B1-B2/C1-C2 中指定的官方 VLM 权重。"""
+    option = vlm_option.upper()
+    model_info = VLM_OPTIONS.get(option)
+    if model_info is None:
+        raise ValueError("VLM 选项仅支持 A1、A2、B1、B2、C1、C2")
+
+    installed = get_installed_vlm_option()
+    if VLM_DIR.exists() and installed != option:
+        log(f"切换 VLM 模型：{installed or '未知旧模型'} -> {option}，清理旧权重")
+        shutil.rmtree(VLM_DIR)
     VLM_DIR.mkdir(parents=True, exist_ok=True)
-    repo = VLM_AWQ_REPO if quant == "awq" else VLM_REPO
-    download_snapshot(repo, VLM_DIR)
+    download_snapshot(model_info["repo"], VLM_DIR)
+    VLM_OPTION_FILE.write_text(option + "\n", encoding="utf-8")
 
 
 def _check_file(path: Path) -> bool:
@@ -211,6 +282,10 @@ def verify_model_integrity(compute: str = "both") -> list[str]:
     if want_vlm:
         if not _check_dir_has_files(VLM_DIR, 1):
             missing.append("vlm/ (VLM 模型未下载)")
+        if get_installed_vlm_option() is None:
+            missing.append("vlm/.vcli-model-option (模型选项标记缺失或无效)")
+        if not _check_file(VLM_DIR / "config.json"):
+            missing.append("vlm/config.json")
     return missing
 
 
@@ -228,37 +303,49 @@ def ensure_models_ready(compute: str = "both") -> None:
 # PP-OCRv6 引擎
 # ---------------------------------------------------------------------------
 _ppocr_engine: Any = None
+_ppocr_backend: str | None = None
 
 
-def load_ppocr() -> Any:
-    global _ppocr_engine
-    if _ppocr_engine is not None:
+def load_ppocr(backend: str = "cpu") -> Any:
+    global _ppocr_engine, _ppocr_backend
+    if _ppocr_engine is not None and _ppocr_backend == backend:
         return _ppocr_engine
+    if _ppocr_engine is not None:
+        release_ocr()
 
     try:
         from rapidocr import RapidOCR  # type: ignore[import-untyped]
-        from rapidocr.utils.typings import EngineType  # type: ignore[import-untyped]
     except ImportError as exc:
         emit_error("MODEL_RUNTIME_MISSING", f"RapidOCR 未安装或无法导入：{exc}")
         sys.exit(1)
 
     try:
-        engine = EngineType.OPENVINO
-        _ppocr_engine = RapidOCR(params={
-            "Global.model_root_dir": str(PPOCR_DIR),
-            "Det.engine_type": engine,
-            "Cls.engine_type": engine,
-            "Rec.engine_type": engine,
-        })
+        log(f"加载 PP-OCRv6（backend={backend}, device={get_device()}）…")
+        _ppocr_engine = RapidOCR(params=build_ppocr_params(backend))
+        _ppocr_backend = backend
     except Exception as exc:
         emit_error("MODEL_INITIALIZATION_FAILED", f"PP-OCRv6 初始化失败：{exc}")
         sys.exit(1)
     return _ppocr_engine
 
 
-def run_ppocr(image_path: str) -> tuple[str, list[dict[str, Any]]]:
+def deduplicate_ocr_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """移除相同文字在近似相同位置的重复框，保留置信度更高的一项。"""
+    unique: dict[tuple[str, tuple[int, int, int, int]], dict[str, Any]] = {}
+    for item in items:
+        text = re.sub(r"\s+", " ", str(item.get("text", ""))).strip()
+        bbox = item.get("bbox") or [0, 0, 0, 0]
+        rounded_bbox = tuple(round(int(value) / 4) for value in bbox)
+        key = (text.casefold(), rounded_bbox)
+        previous = unique.get(key)
+        if previous is None or float(item.get("confidence", 0)) > float(previous.get("confidence", 0)):
+            unique[key] = item
+    return list(unique.values())
+
+
+def run_ppocr(image_path: str, backend: str = "cpu") -> tuple[str, list[dict[str, Any]]]:
     """对整张图片运行 PP-OCRv6，返回文本和带坐标的识别项。"""
-    engine = load_ppocr()
+    engine = load_ppocr(backend)
     result = engine(image_path)
     boxes = result.boxes if result.boxes is not None else []
     txts = result.txts if result.txts is not None else []
@@ -278,6 +365,7 @@ def run_ppocr(image_path: str) -> tuple[str, list[dict[str, Any]]]:
             item["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
         items.append(item)
 
+    items = deduplicate_ocr_items(items)
     text = "\n".join(item["text"] for item in items)
     return text, items
 
@@ -528,87 +616,6 @@ def _cluster_bbox(indices: list[int], items: list[dict[str, Any]]) -> list[int]:
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
-def compute_relations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """计算每个元素与其他元素的包含/相邻/对齐关系。
-
-    返回列表，与 items 一一对应。
-    - contains: 此元素包含的子元素索引列表
-    - contained_by: 被哪个元素包含（None 表示无父容器）
-    - adjacent: 紧邻元素索引（中心距 < 自身尺寸 × 0.6）
-    - aligned_row: 同行元素索引（y 中心差 < 自身高 × 0.5）
-    - aligned_col: 同列元素索引（x 中心差 < 自身宽 × 0.5）
-    """
-    n = len(items)
-    rels = [
-        {"contains": [], "contained_by": None, "adjacent": [], "aligned_row": [], "aligned_col": []}
-        for _ in range(n)
-    ]
-
-    bboxes = [item.get("bbox", [0, 0, 0, 0]) for item in items]
-
-    for i in range(n):
-        b = bboxes[i]
-        w = max(1, b[2] - b[0])
-        h = max(1, b[3] - b[1])
-        cx = (b[0] + b[2]) / 2.0
-        cy = (b[1] + b[3]) / 2.0
-        area = w * h
-
-        for j in range(n):
-            if i == j:
-                continue
-            bj = bboxes[j]
-            wj = max(1, bj[2] - bj[0])
-            hj = max(1, bj[3] - bj[1])
-            cxj = (bj[0] + bj[2]) / 2.0
-            cyj = (bj[1] + bj[3]) / 2.0
-            area_j = wj * hj
-
-            # 包含关系：A 包含 B（A 的 bbox 完全覆盖 B，且面积大 1.5 倍以上）
-            if (b[0] <= bj[0] and b[1] <= bj[1] and b[2] >= bj[2] and b[3] >= bj[3]
-                    and area > area_j * 1.5):
-                rels[i]["contains"].append(j)
-                rels[j]["contained_by"] = i
-
-            # 相邻：中心距 < 两元素较大尺寸 × 0.6
-            max_dim = max(w, wj, h, hj)
-            if ((cx - cxj) ** 2 + (cy - cyj) ** 2) ** 0.5 < max_dim * 0.6:
-                rels[i]["adjacent"].append(j)
-
-            # 同行：y 中心差 < 两元素较矮高 × 0.5
-            if abs(cy - cyj) < max(h, hj) * 0.5:
-                rels[i]["aligned_row"].append(j)
-
-            # 同列：x 中心差 < 两元素较窄宽 × 0.5
-            if abs(cx - cxj) < max(w, wj) * 0.5:
-                rels[i]["aligned_col"].append(j)
-
-    return rels
-
-
-def classify_text_pattern(text: str) -> str:
-    """基于文本模式（非内容）进行分类，语言无关。"""
-    if not text:
-        return "empty"
-    if re.match(r"^[\w.+-]+@[\w-]+\.\w{2,}$", text):
-        return "email_pattern"
-    if re.match(r"https?://", text):
-        return "url_pattern"
-    if re.match(r"^\+?\d[\d\s\-\(\)]{6,}$", text):
-        return "phone_pattern"
-    if re.match(r"^[\d\w._-]+$", text) and len(text) >= 6:
-        return "code_pattern"
-    if text.endswith(":") or text.endswith("："):
-        return "label_pattern"
-    if re.match(r"^[\d.,%$€£¥+\-*/=<>]+$", text):
-        return "numeric_pattern"
-    if len(text) <= 3:
-        return "short"
-    if len(text) > 50:
-        return "paragraph"
-    return "normal"
-
-
 def detect_layout(
     items: list[dict[str, Any]],
     img_w: int,
@@ -665,6 +672,7 @@ def merge_web_results(
     image_path: str,
     ocr_items: list[dict[str, Any]],
     min_ui_confidence: float,
+    ui_items: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]], str, dict[str, Any] | None]:
     """网页模式：OCR 全图 + YOLO UI 定位 + 合并 + 布局分析。"""
     log("Web 模式：OCR 全图识别 + YOLO UI 定位")
@@ -673,7 +681,8 @@ def merge_web_results(
     with Image.open(image_path) as img:
         img_w, img_h = img.size
 
-    ui_items = run_yolo_detection(image_path)
+    if ui_items is None:
+        ui_items = run_yolo_detection(image_path)
     log(f"YOLO 检测到 {len(ui_items)} 个 UI 元素（阈值={BOX_THRESHOLD}）")
 
     ui_with_text, unassigned = assign_text_to_ui(ocr_items, ui_items)
@@ -690,6 +699,15 @@ def merge_web_results(
     ui_with_text = kept
     if dropped:
         log(f"过滤 {dropped}/{before} 个空+低置信（<{min_ui_confidence}）UI 误检")
+
+    # 没有文字和类别语义的空 UI 框价值有限，只保留最高置信度的一小部分。
+    text_ui = [item for item in ui_with_text if item.get("text")]
+    empty_ui = sorted(
+        (item for item in ui_with_text if not item.get("text")),
+        key=lambda item: float(item.get("confidence", 0)),
+        reverse=True,
+    )[:MAX_EMPTY_UI_ITEMS]
+    ui_with_text = text_ui + empty_ui
 
     # 合并所有元素：UI 元素 + 未匹配的 OCR 段落
     all_items = ui_with_text + unassigned
@@ -716,20 +734,12 @@ def merge_web_results(
         c_bbox = _cluster_bbox(indices, all_items)
         cluster_geoms[cid] = compute_geometry(c_bbox, img_w, img_h)
 
-    # 为每个 item 注入线索
+    # 每个元素只保留对无视觉模型最有价值的定位线索。
+    # 宽高比可由 bbox 计算，组大小/排列/区域已在 layout.cluster_summary 中，避免逐项重复。
     for idx, item in enumerate(all_items):
-        cid = item_cluster.get(idx)
-        item["geometry"] = compute_geometry(item.get("bbox", [0, 0, 0, 0]), img_w, img_h)
-        if cid is not None:
-            cg = cluster_geoms[cid]
-            item["cluster"] = {
-                "id": cid,
-                "size": len(groups[cid]),
-                "arrangement": _arrangement(groups[cid], all_items),
-                "region": cg["region"],
-            }
-        else:
-            item["cluster"] = {"id": -1, "size": 1, "arrangement": "single", "region": "unknown"}
+        cid = item_cluster.get(idx, -1)
+        item["region"] = compute_geometry(item.get("bbox", [0, 0, 0, 0]), img_w, img_h)["region"]
+        item["cluster_id"] = cid
 
     # 页面级布局
     layout = detect_layout(all_items, img_w, img_h)
@@ -739,12 +749,151 @@ def merge_web_results(
     for item in all_items:
         if item.get("text"):
             text_parts.append(item["text"])
-        else:
-            text_parts.append("[ui_element]")
 
     text = "\n".join(text_parts)
     model_name = f"{YOLO_MODEL_DISPLAY} + {PPOCR_MODEL_DISPLAY}"
     return text, all_items, model_name, layout
+
+
+MIX_OCR_CONTEXT_TOKENS_DEFAULT = 16_384
+MIX_OCR_CONTEXT_TOKENS_MAX = 32_768
+MIX_OCR_ITEM_TEXT_MAX_CHARS = 400
+
+
+def _token_count(tokenizer: Any, text: str) -> int:
+    return len(tokenizer.encode(text, add_special_tokens=False))
+
+
+def _compact_ocr_line(
+    item: dict[str, Any],
+    index: int,
+    img_size: list[int] | None,
+) -> tuple[str, str]:
+    text = re.sub(r"\s+", " ", str(item.get("text", ""))).strip()
+    if len(text) > MIX_OCR_ITEM_TEXT_MAX_CHARS:
+        text = text[:MIX_OCR_ITEM_TEXT_MAX_CHARS - 1] + "…"
+    bbox = item.get("bbox")
+    position = ""
+    bucket = "unknown"
+    if bbox and len(bbox) == 4:
+        x1, y1, x2, y2 = [int(value) for value in bbox]
+        if img_size and img_size[0] > 0 and img_size[1] > 0:
+            img_w, img_h = img_size
+            cx = max(0, min(100, round(((x1 + x2) / 2) / img_w * 100)))
+            cy = max(0, min(100, round(((y1 + y2) / 2) / img_h * 100)))
+            width = max(1, min(100, round((x2 - x1) / img_w * 100)))
+            height = max(1, min(100, round((y2 - y1) / img_h * 100)))
+            position = f"@{cx},{cy},{width},{height}"
+            bucket = f"{min(2, cx // 34)}:{min(2, cy // 34)}"
+        else:
+            position = f"@{x1},{y1},{x2},{y2}"
+    kind = item.get("type") or "text"
+    return f"#{index} {position} {kind} {text}".strip(), bucket
+
+
+def build_bounded_ocr_context(
+    processor: Any,
+    items: list[dict[str, Any]],
+    layout: dict[str, Any] | None,
+    token_budget: int,
+) -> tuple[str | None, dict[str, Any]]:
+    token_budget = max(0, min(MIX_OCR_CONTEXT_TOKENS_MAX, int(token_budget)))
+    original_chars = sum(len(str(item.get("text", ""))) for item in items)
+    empty_stats: dict[str, Any] = {
+        "originalItems": len(items),
+        "includedItems": 0,
+        "omittedItems": len(items),
+        "originalChars": original_chars,
+        "injectedTokens": 0,
+        "tokenBudget": token_budget,
+        "truncated": bool(items),
+        "strategy": "spatial-priority-token-budget-v1",
+    }
+    if token_budget == 0 or not items:
+        return None, empty_stats
+
+    tokenizer = processor.tokenizer
+    img_size = layout.get("img_size") if layout else None
+    records: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(items):
+        text = re.sub(r"\s+", " ", str(item.get("text", ""))).strip()
+        if not text:
+            continue
+        line, bucket = _compact_ocr_line(item, index, img_size)
+        dedupe_key = (text.casefold(), bucket)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        score = 0
+        if len(text) <= 120:
+            score += 2
+        if item.get("type") == "ui_text":
+            score += 3
+        if re.search(r"\d|[$€£¥%]|\b(?:date|total|amount|warning|error)\b", text, re.I):
+            score += 3
+        if index < 24 or index >= max(0, len(items) - 12):
+            score += 2
+        records.append({"index": index, "line": line, "bucket": bucket, "score": score})
+
+    header_data = {
+        "items": len(items),
+        "layout": layout.get("patterns", {}) if layout else {},
+        "coordinate": "@centerX%,centerY%,width%,height%",
+    }
+    header = "压缩 OCR 上下文：" + json.dumps(header_data, ensure_ascii=False, separators=(",", ":"))
+    used_tokens = _token_count(tokenizer, header)
+    selected: dict[int, dict[str, Any]] = {}
+
+    def try_add(record: dict[str, Any]) -> None:
+        nonlocal used_tokens
+        if record["index"] in selected:
+            return
+        line_tokens = _token_count(tokenizer, "\n" + record["line"])
+        if used_tokens + line_tokens > token_budget:
+            return
+        selected[record["index"]] = record
+        used_tokens += line_tokens
+
+    # 页面首尾是标题、导航、页脚和结论的高概率区域。
+    for record in records[:24]:
+        try_add(record)
+    for record in records[-12:]:
+        try_add(record)
+
+    # 九宫格轮询，避免长网页只保留顶部内容。
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        buckets.setdefault(record["bucket"], []).append(record)
+    bucket_positions = {key: 0 for key in buckets}
+    while True:
+        progressed = False
+        for key in sorted(buckets):
+            position = bucket_positions[key]
+            values = buckets[key]
+            if position >= len(values):
+                continue
+            before = len(selected)
+            try_add(values[position])
+            bucket_positions[key] += 1
+            progressed = progressed or len(selected) > before
+        if not progressed:
+            break
+
+    # 最后按金额、日期、UI 标签等优先级补齐剩余预算。
+    for record in sorted(records, key=lambda value: (-value["score"], value["index"])):
+        try_add(record)
+
+    ordered = [selected[index]["line"] for index in sorted(selected)]
+    context = header + ("\n" + "\n".join(ordered) if ordered else "")
+    stats = {
+        **empty_stats,
+        "includedItems": len(ordered),
+        "omittedItems": max(0, len(items) - len(ordered)),
+        "injectedTokens": _token_count(tokenizer, context),
+        "truncated": len(ordered) < len(items),
+    }
+    return context, stats
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +901,31 @@ def merge_web_results(
 # ---------------------------------------------------------------------------
 _vlm_model: Any = None
 _vlm_processor: Any = None
+
+
+def ensure_awq_config_compatibility(vlm_option: str) -> None:
+    """让 Transformers 按官方权重实际结构保留未量化的 lm_head。"""
+    if not vlm_option.endswith("2"):
+        return
+    config_path = VLM_DIR / "config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        quant_config = config.get("quantization_config")
+        if not isinstance(quant_config, dict):
+            return
+        modules = quant_config.get("modules_to_not_convert")
+        if not isinstance(modules, list):
+            modules = []
+        if "lm_head" not in modules:
+            modules.append("lm_head")
+            quant_config["modules_to_not_convert"] = modules
+            config_path.write_text(
+                json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            log("已应用 AWQ 配置兼容修复：lm_head 保持原始精度")
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeError(f"修复 AWQ 配置失败：{exc}") from exc
 
 
 def load_vlm() -> tuple[Any, Any]:
@@ -773,20 +947,29 @@ def load_vlm() -> tuple[Any, Any]:
         emit_error("MODEL_RUNTIME_MISSING", f"transformers 未安装或无法导入：{exc}")
         sys.exit(1)
 
+    installed_option = get_installed_vlm_option() or "unknown"
+    ensure_awq_config_compatibility(installed_option)
+    is_awq = installed_option.endswith("2")
     device = get_device()
-    if device.startswith("cuda"):
-        torch_dtype = torch.bfloat16
+    if device == "cuda":
+        torch_dtype = torch.float16 if is_awq else torch.bfloat16
+    elif device == "mps":
+        torch_dtype = torch.float16
     else:
         torch_dtype = torch.float32
 
     kw: dict[str, Any] = {
         "torch_dtype": torch_dtype,
-        "device_map": "auto",
+        "low_cpu_mem_usage": True,
     }
+    if device != "cpu":
+        # GPU 模式必须把完整模型放在加速设备上，不允许静默卸载到 CPU。
+        kw["device_map"] = {"": device}
     # AWQ 权重：本地目录含量化权重时由 transformers 自动识别
-    log(f"加载 {VLM_MODEL_DISPLAY}（device={device}）…")
+    model_label = VLM_OPTIONS.get(installed_option, {}).get("label", VLM_MODEL_DISPLAY)
+    log(f"加载 {model_label}（option={installed_option}, device={device}）…")
     try:
-        _vlm_processor = AutoProcessor.from_pretrained(str(VLM_DIR))
+        _vlm_processor = AutoProcessor.from_pretrained(str(VLM_DIR), use_fast=False)
         _vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(str(VLM_DIR), **kw)
     except Exception as exc:
         emit_error("MODEL_INITIALIZATION_FAILED", f"VLM 初始化失败：{exc}")
@@ -839,56 +1022,62 @@ def _parse_vlm_json(text: str) -> dict[str, Any]:
 def run_vlm(
     image_path: str,
     prompt: str,
-    ocr_context: str | None = None,
+    ocr_items: list[dict[str, Any]] | None = None,
+    ocr_layout: dict[str, Any] | None = None,
+    mix_ocr_context_tokens: int = MIX_OCR_CONTEXT_TOKENS_DEFAULT,
     web_mode: bool = False,
+    ui_items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """运行 VLM 推理，返回结构化 JSON。
-
-    - web_mode 时额外叠加 YOLO UI 坐标参考。
-    - ocr_context 非空时（mix 模式）注入 OCR 文字结果。
-    """
-    from transformers import TextInput  # noqa: F401  (生成参数类型)
+    """运行 VLM 推理；Mix 只注入经过 token 预算压缩的 OCR 上下文。"""
+    content: list[dict[str, Any]] = [{"type": "image", "image": image_path}]
+    if web_mode and ui_items:
+        coords = [
+            {"bbox": item["bbox"], "confidence": round(item.get("confidence", 0), 3)}
+            for item in ui_items[:500]
+        ]
+        content.append({
+            "type": "text",
+            "text": "YOLO UI 坐标参考：" + json.dumps(coords, ensure_ascii=False, separators=(",", ":")),
+        })
 
     model, processor = load_vlm()
-
-    # 组装消息
-    content: list[dict[str, Any]] = [{"type": "image", "image": image_path}]
-    if web_mode:
-        ui_items = run_yolo_detection(image_path)
-        if ui_items:
-            coords = [
-                {"bbox": it["bbox"], "confidence": round(it.get("confidence", 0), 3)}
-                for it in ui_items
-            ]
-            content.append({
-                "type": "text",
-                "text": f"以下是 YOLO 检测到的 UI 元素坐标（参考用）：{json.dumps(coords, ensure_ascii=False)}",
-            })
+    ocr_context: str | None = None
+    ocr_context_stats: dict[str, Any] | None = None
+    if ocr_items is not None:
+        ocr_context, ocr_context_stats = build_bounded_ocr_context(
+            processor,
+            ocr_items,
+            ocr_layout,
+            mix_ocr_context_tokens,
+        )
 
     full_prompt = prompt
     if ocr_context:
-        full_prompt = (
-            f"{ocr_context}\n\n{prompt}\n\n{VLM_JSON_INSTRUCTION}"
-        )
-    elif web_mode:
-        full_prompt = f"{prompt}\n\n{VLM_JSON_INSTRUCTION}"
+        full_prompt = f"{ocr_context}\n\n{prompt}\n\n{VLM_JSON_INSTRUCTION}"
     else:
         full_prompt = f"{prompt}\n\n{VLM_JSON_INSTRUCTION}"
-
     content.append({"type": "text", "text": full_prompt})
     messages = [{"role": "user", "content": content}]
 
     try:
+        from qwen_vl_utils import process_vision_info  # type: ignore[import-untyped]
         text_input = processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        inputs = processor(text=[text_input], images=[image_path], return_tensors="pt")
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = processor(
+            text=[text_input],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
     except Exception as exc:
         emit_error("MODEL_RECOGNITION_FAILED", f"VLM 输入处理失败：{exc}")
         sys.exit(1)
 
-    device = get_device()
-    inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+    model_device = next(model.parameters()).device
+    inputs = {key: (value.to(model_device) if hasattr(value, "to") else value) for key, value in inputs.items()}
 
     try:
         import torch
@@ -899,6 +1088,7 @@ def run_vlm(
                 do_sample=False,
                 temperature=None,
                 top_p=None,
+                top_k=None,
             )
         generated_ids = generated_ids[:, inputs["input_ids"].shape[1]:]
         response = processor.batch_decode(
@@ -909,22 +1099,32 @@ def run_vlm(
         sys.exit(1)
 
     parsed = _parse_vlm_json(response)
-    raw = parsed.get("raw") or response
-    summary = parsed.get("summary") or raw
+    raw = parsed.get("raw")
+    summary = parsed.get("summary") or raw or response
     intent = parsed.get("intent") or ""
     elements = parsed.get("elements")
     if not isinstance(elements, list):
         elements = []
 
-    return {
+    result: dict[str, Any] = {
         "text": summary,
-        "raw": raw,
         "intent": intent,
         "summary": summary,
         "elements": elements,
-        "engine": "qwen2.5-vl-7b",
+        "engine": f"qwen2.5-vl-{(get_installed_vlm_option() or 'unknown').lower()}",
         "mode": "vlm",
     }
+    if raw:
+        result["raw"] = raw
+    if ocr_context_stats is not None:
+        result["ocr_context"] = ocr_context_stats
+    return result
+
+
+def strip_internal_item_fields(items: list[dict[str, Any]]) -> None:
+    for item in items:
+        item.pop("confidence", None)
+        item.pop("source", None)
 
 
 def run_inference(
@@ -934,14 +1134,23 @@ def run_inference(
     min_ui_confidence: float,
     mode: str = "ocr",
     prompt: str | None = None,
+    ocr_backend: str = "cpu",
+    mix_ocr_context_tokens: int = MIX_OCR_CONTEXT_TOKENS_DEFAULT,
 ) -> None:
     if mode in ("vlm", "mix"):
-        run_vlm_inference(image_path, web_mode, prompt, mode)
+        run_vlm_inference(
+            image_path,
+            web_mode,
+            prompt,
+            mode,
+            min_ui_confidence,
+            ocr_backend,
+            mix_ocr_context_tokens,
+        )
         return
 
-    # ---- OCR 模式（现有逻辑）----
     try:
-        text, ocr_items = run_ppocr(image_path)
+        text, ocr_items = run_ppocr(image_path, ocr_backend)
     except ImportError as exc:
         emit_error("MODEL_RUNTIME_MISSING", f"Python 依赖未安装：{exc}")
         sys.exit(1)
@@ -954,73 +1163,123 @@ def run_inference(
         sys.exit(1)
 
     if web_mode:
-        text, items, _model_name, layout = merge_web_results(image_path, ocr_items, min_ui_confidence)
+        text, items, _model_name, layout = merge_web_results(
+            image_path, ocr_items, min_ui_confidence
+        )
     else:
         items = ocr_items
         layout = None
 
-    # 移除对 AI 无意义的字段
-    for item in items:
-        item.pop("confidence", None)
-        item.pop("source", None)
-
+    strip_internal_item_fields(items)
     payload: dict[str, Any] = {
         "text": text,
         "items": items,
         "mode": "ocr",
+        "engine": f"ppocrv6-{ocr_backend}",
     }
     if layout:
         payload["layout"] = layout
     emit(payload)
 
 
-def run_vlm_inference(image_path: str, web_mode: bool, prompt: str | None, mode: str) -> None:
-    """VLM / mix 模式入口。
+def run_vlm_inference(
+    image_path: str,
+    web_mode: bool,
+    prompt: str | None,
+    mode: str,
+    min_ui_confidence: float,
+    ocr_backend: str,
+    mix_ocr_context_tokens: int,
+) -> None:
+    """VLM / Mix 模式入口，OCR 与 VLM 始终顺序执行。"""
+    output_items: list[dict[str, Any]] = []
+    layout: dict[str, Any] | None = None
+    ui_items: list[dict[str, Any]] | None = None
+    ocr_text = ""
 
-    - vlm：纯 VLM，直接看原图（可选 YOLO 坐标）。
-    - mix：顺序执行 —— 先 OCR，释放 OCR 资源后，再加载 VLM 并注入 OCR 结果。
-    """
-    ocr_context: str | None = None
     if mode == "mix":
         try:
-            text, ocr_items = run_ppocr(image_path)
-        except Exception as exc:
+            ocr_text, ocr_items = run_ppocr(image_path, ocr_backend)
+            if web_mode:
+                ui_items = run_yolo_detection(image_path)
+                ocr_text, output_items, _model_name, layout = merge_web_results(
+                    image_path,
+                    ocr_items,
+                    min_ui_confidence,
+                    ui_items,
+                )
+            else:
+                output_items = ocr_items
+        except BaseException as exc:
+            if isinstance(exc, SystemExit):
+                raise
             emit_error("MODEL_INITIALIZATION_FAILED", f"OCR 阶段失败：{exc}")
             sys.exit(1)
-        # 释放 OCR 资源，避免与 VLM 争用
-        release_ocr()
-        if ocr_items:
-            lines = [
-                f"{it.get('text', '')} {('bbox=' + str(it['bbox'])) if 'bbox' in it else ''}".rstrip()
-                for it in ocr_items
-                if it.get("text")
-            ]
-            ocr_context = "OCR 识别结果（文字与坐标，可能不完整）：\n" + "\n".join(lines)
         prompt = prompt or MIX_DEFAULT_PROMPT
+        strip_internal_item_fields(output_items)
+        release_ocr()
     else:
         prompt = prompt or VLM_DEFAULT_PROMPT
+        if web_mode:
+            try:
+                ui_items = run_yolo_detection(image_path)
+            except Exception as exc:
+                emit_error("MODEL_INITIALIZATION_FAILED", f"YOLO 阶段失败：{exc}")
+                sys.exit(1)
+            release_ocr()
 
-    result = run_vlm(image_path, prompt, ocr_context, web_mode)
+    result = run_vlm(
+        image_path,
+        prompt,
+        output_items if mode == "mix" else None,
+        layout,
+        mix_ocr_context_tokens,
+        web_mode,
+        ui_items,
+    )
+    result["mode"] = mode
+    if mode == "mix":
+        result["engine"] = f"ppocrv6-{ocr_backend}+qwen2.5-vl-{(get_installed_vlm_option() or 'unknown').lower()}"
+        result["items"] = output_items
+        result["ocr_text"] = ocr_text
+        if layout:
+            result["layout"] = layout
     emit(result)
 
 
 def release_ocr() -> None:
-    """释放 OCR 引擎（RapidOCR/YOLO）占用的资源。"""
-    global _ppocr_engine, _yolo_model
+    """释放 OCR/YOLO 的 CPU 与 GPU 资源。"""
+    global _ppocr_engine, _ppocr_backend, _yolo_model
     _ppocr_engine = None
+    _ppocr_backend = None
     _yolo_model = None
     try:
-        import gc
+        import torch
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
     except Exception:
-        pass
+        gc.collect()
 
 
 # ---------------------------------------------------------------------------
 # 自检 / 主入口
 # ---------------------------------------------------------------------------
-def self_test(compute: str = "both") -> bool:
+def self_test(
+    compute: str = "both",
+    ocr_backend: str = "cpu",
+    require_gpu: bool = False,
+) -> bool:
     import traceback
+    try:
+        if require_gpu:
+            ensure_accelerator_available()
+    except Exception as exc:
+        log(f"GPU 自检失败：{exc}")
+        return False
+
     missing = verify_model_integrity(compute)
     if missing:
         log("模型文件不完整，缺失：")
@@ -1031,21 +1290,19 @@ def self_test(compute: str = "both") -> bool:
     want_vlm = compute in ("vlm", "both")
     if want_ocr:
         try:
-            load_ppocr()
-        except Exception as exc:
-            log(f"PP-OCRv6 自检失败：{exc}")
-            log(traceback.format_exc())
-            return False
-        try:
+            load_ppocr(ocr_backend)
             load_yolo()
-        except Exception as exc:
-            log(f"YOLO 自检失败：{exc}")
+        except BaseException as exc:
+            log(f"OCR/YOLO 自检失败：{exc}")
             log(traceback.format_exc())
             return False
+        finally:
+            # MIX 是顺序执行，验证后也必须释放 OCR/YOLO 再加载 VLM。
+            release_ocr()
     if want_vlm:
         try:
             load_vlm()
-        except Exception as exc:
+        except BaseException as exc:
             log(f"VLM 自检失败：{exc}")
             log(traceback.format_exc())
             return False
@@ -1057,8 +1314,12 @@ def main() -> None:
     parser.add_argument("--init", action="store_true", help="下载全部模型")
     parser.add_argument("--compute", choices=["ocr", "vlm", "both"], default="both",
                         help="init/self-test 涉及的模型范围（默认 both）")
-    parser.add_argument("--quant", choices=["bf16", "awq"], default="bf16",
-                        help="VLM 量化版本（默认 bf16）")
+    parser.add_argument("--vlm-option", choices=["A1", "A2", "B1", "B2", "C1", "C2"], default="B2",
+                        help="VLM 模型选项（默认 B2）")
+    parser.add_argument("--ocr-backend", choices=["cpu", "gpu"], default="cpu",
+                        help="PP-OCRv6 运行位置（默认 cpu）")
+    parser.add_argument("--require-gpu", action="store_true",
+                        help="要求加速设备可用，禁止静默回退到 CPU")
     parser.add_argument("--self-test", action="store_true", help="验证模型可加载")
     parser.add_argument("--image", help="图片文件路径")
     parser.add_argument("--mode", choices=["ocr", "vlm", "mix"], default="ocr",
@@ -1072,11 +1333,19 @@ def main() -> None:
         default=DEFAULT_MIN_UI_CONFIDENCE,
         help=f"空 UI 元素保留阈值（默认 {DEFAULT_MIN_UI_CONFIDENCE}，仅 --web 生效）",
     )
+    parser.add_argument(
+        "--mix-ocr-context-tokens",
+        type=int,
+        default=MIX_OCR_CONTEXT_TOKENS_DEFAULT,
+        help=f"Mix 注入 OCR 的 token 预算（0-{MIX_OCR_CONTEXT_TOKENS_MAX}）",
+    )
     args = parser.parse_args()
 
     if args.init:
         try:
-            download_all_models(args.compute, args.quant)
+            if args.require_gpu:
+                ensure_accelerator_available()
+            download_all_models(args.compute, args.vlm_option, args.ocr_backend)
         except Exception as exc:
             emit_error("MODEL_INITIALIZATION_FAILED", f"模型下载失败：{exc}")
             sys.exit(1)
@@ -1084,7 +1353,7 @@ def main() -> None:
         sys.exit(0)
 
     if args.self_test:
-        ok = self_test(args.compute)
+        ok = self_test(args.compute, args.ocr_backend, args.require_gpu)
         emit({"ok": ok})
         sys.exit(0 if ok else 1)
 
@@ -1103,7 +1372,22 @@ def main() -> None:
     elif args.mode == "vlm":
         compute = "vlm"
     ensure_models_ready(compute)
-    run_inference(args.image, args.ocr, args.web, args.min_confidence, args.mode, args.prompt)
+    if args.require_gpu:
+        try:
+            ensure_accelerator_available()
+        except Exception as exc:
+            emit_error("MODEL_RUNTIME_MISSING", str(exc))
+            sys.exit(1)
+    run_inference(
+        args.image,
+        args.ocr,
+        args.web,
+        args.min_confidence,
+        args.mode,
+        args.prompt,
+        args.ocr_backend,
+        args.mix_ocr_context_tokens,
+    )
 
 
 if __name__ == "__main__":

@@ -25,47 +25,110 @@ export const VISION_OCR_ENGINES = ["ppocrv6"] as const;
 export type VisionOcrEngineType = typeof VISION_OCR_ENGINES[number];
 
 // ---------------------------------------------------------------------------
-// VLM 常量（Qwen2.5-VL 视觉语言模型）
+// VLM 常量（仅允许 Qwen2.5-VL 3B/7B/32B 的 BF16 与 AWQ 官方版本）
 // ---------------------------------------------------------------------------
-export const VLM_REPO = "Qwen/Qwen2.5-VL-7B-Instruct";
-export const VLM_AWQ_REPO = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ";
-export const VLM_MODEL_DISPLAY = "Qwen2.5-VL 7B (transformers)";
-export const VLM_MODEL_ID = "qwen2.5-vl-7b";
+export type VlmQuantization = "bf16" | "awq";
+export type VlmModelSize = "3b" | "7b" | "32b";
+export type VlmModelOptionId = "A1" | "A2" | "B1" | "B2" | "C1" | "C2";
 
-// VLM 量化版本表：显存阈值（GB）决定推荐量化方式
-export interface VlmQuantOption {
-  id: string;
+export interface VlmModelOption {
+  id: VlmModelOptionId;
+  size: VlmModelSize;
+  quantization: VlmQuantization;
   display: string;
   repo: string;
   minVramGb: number;
   description: string;
+  downloadSize: string;
 }
 
-export const VLM_QUANT_OPTIONS: VlmQuantOption[] = [
+export const VLM_MODEL_OPTIONS: readonly VlmModelOption[] = [
   {
-    id: "bf16",
-    display: "BF16（原生，质量无损）",
-    repo: VLM_REPO,
-    minVramGb: 16,
-    description: "原生半精度，质量无损，需 16GB+ 显存",
-  },
-  {
-    id: "awq",
-    display: "AWQ INT4（量化，省显存）",
-    repo: VLM_AWQ_REPO,
+    id: "A1",
+    size: "3b",
+    quantization: "bf16",
+    display: "A1 — Qwen2.5-VL 3B BF16",
+    repo: "Qwen/Qwen2.5-VL-3B-Instruct",
     minVramGb: 8,
-    description: "INT4-AWQ 量化，质量略降，8-15GB 显存推荐",
+    description: "3B 原生半精度，速度快、质量完整，建议 8GB+ 显存",
+    downloadSize: "约 6-8 GB",
   },
-];
+  {
+    id: "A2",
+    size: "3b",
+    quantization: "awq",
+    display: "A2 — Qwen2.5-VL 3B AWQ INT4",
+    repo: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+    minVramGb: 4,
+    description: "3B AWQ 4-bit，最省显存，适合低显存 GPU",
+    downloadSize: "约 2-4 GB",
+  },
+  {
+    id: "B1",
+    size: "7b",
+    quantization: "bf16",
+    display: "B1 — Qwen2.5-VL 7B BF16",
+    repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+    minVramGb: 16,
+    description: "7B 原生半精度，质量完整，建议 16GB+ 显存",
+    downloadSize: "约 14-16 GB",
+  },
+  {
+    id: "B2",
+    size: "7b",
+    quantization: "awq",
+    display: "B2 — Qwen2.5-VL 7B AWQ INT4",
+    repo: "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+    minVramGb: 8,
+    description: "7B AWQ 4-bit，质量、速度和显存占用均衡，16GB GPU 推荐",
+    downloadSize: "约 5-8 GB",
+  },
+  {
+    id: "C1",
+    size: "32b",
+    quantization: "bf16",
+    display: "C1 — Qwen2.5-VL 32B BF16",
+    repo: "Qwen/Qwen2.5-VL-32B-Instruct",
+    minVramGb: 72,
+    description: "32B 原生半精度，质量最高，建议 72GB+ 显存",
+    downloadSize: "约 64-70 GB",
+  },
+  {
+    id: "C2",
+    size: "32b",
+    quantization: "awq",
+    display: "C2 — Qwen2.5-VL 32B AWQ INT4",
+    repo: "Qwen/Qwen2.5-VL-32B-Instruct-AWQ",
+    minVramGb: 24,
+    description: "32B AWQ 4-bit，仍需要高显存 GPU，建议 24GB+",
+    downloadSize: "约 18-24 GB",
+  },
+] as const;
 
-export function recommendVlmQuant(vramGb: number): VlmQuantOption | null {
-  if (vramGb >= 16) return VLM_QUANT_OPTIONS[0]!;
-  if (vramGb >= 8) return VLM_QUANT_OPTIONS[1]!;
+export const VLM_MODEL_DISPLAY = "Qwen2.5-VL 3B/7B/32B (transformers)";
+export const DEFAULT_VLM_MODEL_OPTION: VlmModelOptionId = "B2";
+
+export function getVlmModelOption(id: string): VlmModelOption | null {
+  return VLM_MODEL_OPTIONS.find((option) => option.id === id.toUpperCase()) ?? null;
+}
+
+export function getVlmOptionForLegacyQuant(quantization: VlmQuantization): VlmModelOption {
+  return getVlmModelOption(quantization === "bf16" ? "B1" : "B2")!;
+}
+
+export function recommendVlmModelOption(vramGb: number): VlmModelOption | null {
+  const preference: VlmModelOptionId[] = ["C1", "C2", "B1", "B2", "A1", "A2"];
+  for (const id of preference) {
+    const option = getVlmModelOption(id)!;
+    if (vramGb >= option.minVramGb) return option;
+  }
   return null;
 }
 
-export const VLM_DOWNLOAD_SIZE_ESTIMATE = "约 8-16 GB（Qwen2.5-VL 模型权重）";
-export const VLM_REQUEST_TIMEOUT = 120_000;
+export const VLM_DOWNLOAD_SIZE_ESTIMATE = "约 2-70 GB（取决于 A1-A2/B1-B2/C1-C2）";
+export const VLM_REQUEST_TIMEOUT = 300_000;
+export const MIX_OCR_CONTEXT_TOKENS_DEFAULT = 16_384;
+export const MIX_OCR_CONTEXT_TOKENS_MAX = 32_768;
 
 // ---------------------------------------------------------------------------
 // 推理模式与计算能力
@@ -105,7 +168,7 @@ export const TORCHVISION_VERSION = "0.22.1";
 // ---------------------------------------------------------------------------
 export const TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu";
 export const TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu126";
-export const TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.2";
+export const TORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm6.3";
 
 export type ComputeMode = "cpu" | "gpu";
 export type GpuVendor = "nvidia" | "amd" | "apple" | "none";

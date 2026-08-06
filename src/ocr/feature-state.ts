@@ -7,18 +7,29 @@ import {
   VISION_STATE_FILE_NAME,
 } from "./constants.js";
 import type { VisionFeatureState, VisionFeatureStatus } from "./types.js";
-import type { ComputeCapability, OcrBackend } from "./constants.js";
+import type { ComputeCapability, OcrBackend, VlmModelOptionId } from "./constants.js";
 
 function isVisionFeatureState(value: unknown): value is VisionFeatureState {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
+  const validStatuses: VisionFeatureStatus[] = [
+    "none", "downloading", "installing", "verifying", "ready", "broken",
+  ];
+  const validCapabilities: ComputeCapability[] = ["ocr", "vlm", "both"];
   return typeof record.status === "string" &&
+    validStatuses.includes(record.status as VisionFeatureStatus) &&
     typeof record.feature_version === "string" &&
     typeof record.python_version === "string" &&
     typeof record.platform === "string" &&
     typeof record.arch === "string" &&
     typeof record.installed_at === "string" &&
-    typeof record.verified === "boolean";
+    typeof record.verified === "boolean" &&
+    (record.computeMode === "cpu" || record.computeMode === "gpu") &&
+    typeof record.capabilities === "string" &&
+    validCapabilities.includes(record.capabilities as ComputeCapability) &&
+    (record.ocrBackend === undefined || record.ocrBackend === "cpu" || record.ocrBackend === "gpu") &&
+    (record.vlmModelOption === undefined || ["A1", "A2", "B1", "B2", "C1", "C2"].includes(String(record.vlmModelOption))) &&
+    (record.vlmQuantization === undefined || record.vlmQuantization === "bf16" || record.vlmQuantization === "awq");
 }
 
 export class VisionStateStore {
@@ -55,6 +66,7 @@ export class VisionStateStore {
       computeMode: "cpu" | "gpu";
       capabilities: ComputeCapability;
       ocrBackend?: OcrBackend;
+      vlmModelOption?: VlmModelOptionId;
       vlmQuantization?: string;
     },
   ): Promise<void> {
@@ -69,6 +81,7 @@ export class VisionStateStore {
       computeMode: config.computeMode,
       capabilities: config.capabilities,
       ...(config.ocrBackend ? { ocrBackend: config.ocrBackend } : {}),
+      ...(config.vlmModelOption ? { vlmModelOption: config.vlmModelOption } : {}),
       ...(config.vlmQuantization ? { vlmQuantization: config.vlmQuantization } : {}),
     };
     await this.writeAtomic(state);

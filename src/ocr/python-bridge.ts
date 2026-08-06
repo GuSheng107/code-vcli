@@ -7,7 +7,7 @@ import {
   VISION_VENV_DIR_NAME,
   VLM_REQUEST_TIMEOUT,
 } from "./constants.js";
-import type { VisionOcrEngineType, VisionMode, ComputeCapability } from "./constants.js";
+import type { VisionOcrEngineType, VisionMode, ComputeCapability, OcrBackend } from "./constants.js";
 import { VcliError } from "../errors.js";
 import type { VisionStateStore } from "./feature-state.js";
 import type { VisionRecognitionResult, PythonOutput } from "./types.js";
@@ -17,6 +17,8 @@ interface PythonBridgeOptions {
   minConfidence?: number;
   mode?: VisionMode;
   prompt?: string;
+  ocrBackend?: OcrBackend;
+  mixOcrContextTokens?: number;
 }
 
 export function getVenvPython(featureDirectory: string): string {
@@ -44,10 +46,13 @@ export async function runModelInit(
   scriptPath: string,
   configRoot: string,
   compute: ComputeCapability = "both",
-  quant?: string,
+  vlmModelOption?: string,
+  ocrBackend: OcrBackend = "cpu",
+  requireGpu = false,
 ): Promise<void> {
-  const initArgs = ["--init", "--compute", compute];
-  if (quant) initArgs.push("--quant", quant);
+  const initArgs = ["--init", "--compute", compute, "--ocr-backend", ocrBackend];
+  if (requireGpu) initArgs.push("--require-gpu");
+  if (vlmModelOption) initArgs.push("--vlm-option", vlmModelOption);
   const output = await executePython(
     pythonPath,
     scriptPath,
@@ -70,12 +75,18 @@ export async function runModelSelfTest(
   scriptPath: string,
   configRoot: string,
   compute: ComputeCapability = "both",
+  ocrBackend: OcrBackend = "cpu",
+  requireGpu = false,
 ): Promise<boolean> {
   try {
     const output = await executePython(
       pythonPath,
       scriptPath,
-      ["--self-test", "--compute", compute],
+      [
+        "--self-test", "--compute", compute,
+        "--ocr-backend", ocrBackend,
+        ...(requireGpu ? ["--require-gpu"] : []),
+      ],
       { timeoutMs: 10 * 60_000, env: { VCLI_CONFIG_ROOT: configRoot } },
     );
     return output.ok;
@@ -118,9 +129,15 @@ export async function runVisionInference(
     );
   }
 
-  const args = ["--image", imagePath, "--ocr", ocrEngine];
+  const state = await stateStore.read();
+  const ocrBackend = options.ocrBackend ?? state?.ocrBackend ?? "cpu";
+  const args = ["--image", imagePath, "--ocr", ocrEngine, "--ocr-backend", ocrBackend];
+  if (state?.computeMode === "gpu") args.push("--require-gpu");
   if (options.mode) args.push("--mode", options.mode);
   if (options.prompt) args.push("--prompt", options.prompt);
+  if (options.mixOcrContextTokens !== undefined) {
+    args.push("--mix-ocr-context-tokens", String(options.mixOcrContextTokens));
+  }
   if (webMode) {
     args.push("--web");
     if (options.minConfidence !== undefined) {
@@ -162,6 +179,8 @@ export async function runVisionInference(
     ...(output.elements ? { elements: output.elements } : {}),
     ...(output.raw ? { raw: output.raw } : {}),
     ...(output.engine ? { engine: output.engine } : {}),
+    ...(output.ocr_text !== undefined ? { ocrText: output.ocr_text } : {}),
+    ...(output.ocr_context ? { ocrContext: output.ocr_context } : {}),
   } as VisionRecognitionResult;
 }
 

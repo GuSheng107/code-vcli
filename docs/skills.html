@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f0edff" />
     <meta name="description" content="下载 code-vcli Skill，通过 vcli CLI 对截图执行本地视觉识别与网页 UI 元素解析。为无视觉能力的 AI 模型提供 web 开发视觉能力。" />
     <meta property="og:title" content="code-vcli Skill — AI 模型的 Web 开发视觉能力" />
-    <meta property="og:description" content="本地视觉识别，支持 OCR、VLM 视觉理解与 Mix 混合模式。" />
+    <meta property="og:description" content="本地视觉识别，支持紧凑 OCR、Qwen2.5-VL 与受 token 预算保护的 Mix。" />
     <meta property="og:type" content="website" />
     <title>Skills — code-vcli</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
@@ -34,7 +34,7 @@
         <div class="skills-hero-inner">
           <span class="skill-eyebrow">CODE-VCLI SKILL</span>
           <h1>安装 code-vcli<br /><em>视觉识别 Skill</em></h1>
-          <p>让 AI 编码模型「看见」屏幕 — 本地截图转文本，支持 OCR、VLM 视觉理解与 Mix 混合模式。</p>
+          <p>让无多模态能力的 AI 编码模型「看见」屏幕：本地 OCR、VLM 与受 token 预算保护的 Mix。</p>
           <div class="skill-install-center">
             <div class="skill-quick-start">
               <strong>快速开始</strong>
@@ -57,7 +57,7 @@
         <div class="section-heading">
           <span class="kicker">MODES</span>
           <h2 id="mode-title">三种识别模式</h2>
-          <p>根据需求选择 OCR、VLM 或 Mix 模式。</p>
+          <p>根据需求选择 OCR、VLM 或 Mix；超长 OCR 不会无上限进入模型上下文。</p>
         </div>
         <div class="mode-grid">
           <article class="mode-card recommended mode-ocr">
@@ -66,8 +66,8 @@
             <p>整图 OCR，速度快、带坐标。适合文档、扫描件、纯文字图片。</p>
             <div class="cmd-block"><code>vcli run ./image.png --json</code></div>
             <ul>
-              <li>PP-OCRv6（RapidOCR + OpenVINO）</li>
-              <li>返回文字 + 置信度 + 坐标</li>
+              <li>CPU OpenVINO / GPU Torch CUDA 或 MPS</li>
+              <li>返回去重后的文字与坐标；Web JSON 删除重复结构字段</li>
               <li>可选 <code>--web</code> 叠加 YOLO UI 元素检测</li>
             </ul>
           </article>
@@ -77,20 +77,20 @@
             <p>看懂画面含义、回答关于图片的问题，返回意图与总结。需 GPU + 8GB 显存。</p>
             <div class="cmd-block"><code>vcli run ./image.png --vlm --json</code></div>
             <ul>
-              <li>Qwen2.5-VL 7B（transformers）</li>
+              <li>仅 A1/A2/B1/B2/C1/C2 六个官方组合</li>
               <li>返回 intent / summary / elements</li>
-              <li>量化按显存推荐（BF16 16GB+ / AWQ 8-15GB）</li>
+              <li>Apple/AMD 使用 BF16；AWQ 仅 Windows/Linux NVIDIA</li>
             </ul>
           </article>
           <article class="mode-card mode-mix">
             <div class="mode-top"><span class="mode-symbol">MIX</span><b>先定位再理解</b></div>
             <h3>Mix 模式（OCR + VLM）</h3>
-            <p>先 OCR 提取文字，再把文字注入 VLM，兼备定位与理解。</p>
+            <p>OCR 与 VLM 顺序执行；OCR 完成后释放资源，只注入 token 预算内的压缩上下文。</p>
             <div class="cmd-block"><code>vcli run ./image.png --mix --json</code></div>
             <ul>
               <li>顺序执行：OCR → 释放 → VLM</li>
-              <li>文字注入 VLM，先定位再理解</li>
-              <li>需 GPU 模式且同时安装 OCR 与 VLM（both）</li>
+              <li>默认最多注入 16,384 OCR tokens，完整结果另存 artifact</li>
+              <li>运行时可选 CPU OCR + GPU VLM 或全 GPU Mix</li>
             </ul>
           </article>
         </div>
@@ -98,10 +98,10 @@
           <span class="privacy-mark" aria-hidden="true">🔒</span>
           <div>
             <strong>本地推理，图片不上传</strong>
-            <p>推理完全在本地完成，无遥测。首次 <code>vcli init</code> 需下载模型：OCR 约 1-2 GB；VLM（Qwen2.5-VL 7B）另需约 8-16 GB，且需 GPU + 8GB 以上显存。</p>
+            <p>推理完全在本地完成，无遥测。VLM 可选 3B/7B/32B 的 BF16 或 AWQ；CLI 会按显存与平台推荐，并在下载前阻止不兼容组合。</p>
           </div>
         </div>
-        <p class="mode-retention">不确定图片类型时，先向用户确认是「网页/UI」还是「普通文档」再选择模式；需要读懂画面含义时用 <code>--vlm</code> 或 <code>--mix</code>。</p>
+        <p class="mode-retention">十万字符级网页/表格先运行 OCR JSON，只读取相关区段，再用 <code>--vlm -p</code> 提问。Mix 会自动去重、空间抽样和限制 tokens，并返回完整 OCR artifact 路径。</p>
       </section>
 
       <section class="skills-section install-section" id="install-skill" aria-labelledby="install-title">

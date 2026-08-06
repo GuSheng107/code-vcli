@@ -3,7 +3,9 @@
 import { stderr, stdout } from "node:process";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { stat } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 
 import { ConfigStore, resolveWorkspacePath } from "./config.js";
 import { VcliError, toVcliError } from "./errors.js";
@@ -35,73 +37,92 @@ import {
   IMAGE_MAX_BYTES,
   PYTHON_MIN_VERSION,
   VLM_MODEL_DISPLAY,
+  COMPUTE_CAPABILITIES,
+  OCR_BACKENDS,
+  VLM_MODEL_OPTIONS,
+  MIX_OCR_CONTEXT_TOKENS_MAX,
   type VisionMode,
 } from "./ocr/constants.js";
 import type { VisionOcrEngineType } from "./ocr/constants.js";
-import type { ComputeCapability } from "./ocr/constants.js";
+import type { ComputeCapability, ComputeMode, OcrBackend, VlmModelOptionId, VlmQuantization } from "./ocr/constants.js";
 
 const DISCLAIMER = "code-vcli — 为 AI 模型提供 web 开发视觉能力的 CLI 工具";
 
 const HELP = `${DISCLAIMER}
 
 Usage:
-  code-vcli [command]
+  vcli [command]
 
 Commands:
-  code-vcli                  打开交互界面
-  init [--yes] [--workspace <path>] [--reset-workspace]  初始化视觉模型环境
-  run <image> [options]      对图片执行视觉识别
-  info                       显示 code-vcli 与系统环境信息
-  update                     从 npm Registry 更新到最新版
-  install [--force]          安装到用户目录并加入 PATH
-  version [--check]          显示版本，可检查 npm 最新版本
-  help                       显示帮助
+  vcli                       打开交互界面
+  vcli init [options]        初始化 OCR/VLM 环境并下载模型
+  vcli run <image> [options] 识别图片
+  vcli info                  显示系统、GPU、Python、OCR/VLM 与工作区信息
+  vcli update                从 npm Registry 更新
+  vcli install [--force]     安装用户级启动入口
+  vcli version [--check]     显示/检查版本
+  vcli help                  显示帮助
 
 Init Options:
-  --yes                      跳过所有交互确认，使用默认值
-  --workspace <path>         指定工作区路径（存放 venv + 模型，约 1-2 GB）
-  --reset-workspace          重新选择工作区路径
+  --yes                         跳过交互，使用默认值或显式参数
+  --workspace <path>            工作区（venv、模型、files）
+  --reset-workspace             重新选择工作区
+  --compute <cpu|gpu>           CPU 仅 OCR；GPU 可装 OCR/VLM/both
+  --capabilities <ocr|vlm|both> 安装能力；Mix 需要 both
+  --ocr-backend <cpu|gpu>       默认 OCR 运行位置
+  --vlm-option <A1..C2>         VLM 模型选项
+
+VLM Options:
+  A1  Qwen2.5-VL 3B BF16       建议 8GB+，NVIDIA/Apple/AMD
+  A2  Qwen2.5-VL 3B AWQ INT4   建议 4GB+，Windows/Linux NVIDIA
+  B1  Qwen2.5-VL 7B BF16       建议 16GB+，NVIDIA/Apple/AMD
+  B2  Qwen2.5-VL 7B AWQ INT4   建议 8GB+，Windows/Linux NVIDIA
+  C1  Qwen2.5-VL 32B BF16      建议 72GB+，NVIDIA/Apple/AMD
+  C2  Qwen2.5-VL 32B AWQ INT4  建议 24GB+，Windows/Linux NVIDIA
 
 Run Options:
-  <image>                    图片文件路径（必填）
-      --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
-      --vlm                  使用 VLM 视觉理解（Qwen2.5-VL，需已装 VLM 能力）
-      --mix                  OCR + VLM 顺序执行（先 OCR 再注入 VLM，需已装 both）
-  -p, --prompt <text>        VLM/--mix 模式自定义问题（默认有内置模板）
-  -w, --web                  启用 YOLO UI 元素检测（网页/UI 场景）
-      --json                 输出 AI 可读的 JSON（自动保存到工作区 files/）
-      --timeout <seconds>    本次推理超时
-      --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
-  -h, --help                 显示帮助
+  <image>                       png/jpg/jpeg/webp/bmp/tiff/tif，最大 20MB
+      --ocr <ppocrv6>           OCR 引擎（默认 ppocrv6）
+      --vlm                     纯 VLM 视觉理解
+      --mix                     OCR 与 VLM 顺序执行，完整 OCR 另存 artifact
+  -p, --prompt <text>           VLM/Mix 自定义问题
+  -w, --web                     YOLO 网页/UI 元素检测
+      --json                    保存紧凑 JSON，stdout 返回文件路径
+      --timeout <seconds>       推理超时
+      --min-confidence <0~1>    Web 空 UI 元素阈值（默认 0.55）
+      --ocr-backend <cpu|gpu>   本次 OCR/Mix 覆盖 OCR 位置
+      --mix-ocr-context-tokens <0~32768>
+                                Mix OCR token 预算（默认 16384；0 不注入）
+  -h, --help                    显示帮助
 
-识别模式:
-  --ocr        纯 OCR（默认，PP-OCRv6，可选 --web）
-  --vlm        纯 VLM 视觉理解与意图识别（可选 --web/--prompt）
-  --mix        OCR + VLM 顺序执行：先 OCR，再注入结果给 VLM（可选 --web/--prompt）
+Modes:
+  OCR   PP-OCRv6；CPU 使用 OpenVINO，GPU 使用 RapidOCR Torch
+  VLM   Qwen2.5-VL；返回 intent、summary、elements
+  Mix   CPU OCR + GPU VLM 或 GPU OCR + GPU VLM；OCR 后释放资源
+        完整文字保存 *_ocr.txt，完整坐标保存 *_ocr_items.json
+        主结果包含 artifact 路径和 OCR token 压缩统计
 
-OCR Engine:
-  ppocrv6   ${PPOCR_MODEL_DISPLAY}（工业级，速度快，带坐标）
-
-Web Mode:
-  启用 OmniParser YOLO 检测 UI 元素位置，与 OCR 文字合并输出。
-  仅在网页/UI 截图场景使用，普通文档截图无需启用。
-
-Init:
-  需要 Python ${PYTHON_MIN_VERSION}+ 环境
-  模型缓存位置：~/.code-vcli/models/
-  下载大小：${VISION_DOWNLOAD_SIZE_ESTIMATE}
-  首次使用前必须运行 code-vcli init
+Environment:
+  Node.js ${process.versions.node.split(".")[0]} 当前运行；最低要求 Node.js 22+
+  Python ${PYTHON_MIN_VERSION}+
+  CPU 模式：仅 OCR
+  GPU 模式：OCR / VLM / both
+  Apple MPS、AMD ROCm：BF16（A1/B1/C1）
+  Windows/Linux NVIDIA：BF16 或 AWQ
+  OCR 首次下载约 1-2GB；VLM 按 A1-C2 约 2-70GB
+  默认工作区：~/.code-vcli/
 
 Examples:
-  code-vcli init
-  code-vcli init --yes
-  code-vcli run ./image.png
-  code-vcli run ./image.png --json
-  code-vcli run ./image.png --web
-  code-vcli run ./image.png --web --json
-  code-vcli info
-  code-vcli update
-  code-vcli help
+  vcli init
+  vcli init --yes --compute gpu --capabilities both --ocr-backend gpu --vlm-option B2
+  vcli run ./document.png --json
+  vcli run ./page.png --web --json
+  vcli run ./page.png --vlm --json
+  vcli run ./page.png --vlm -p "页面的主要操作是什么？" --json
+  vcli run ./page.png --mix --ocr-backend cpu --json
+  vcli run ./page.png --mix --ocr-backend gpu --json
+  vcli run ./large-page.png --mix --mix-ocr-context-tokens 8192 --json
+  vcli info
 `;
 
 interface RunArguments {
@@ -113,25 +134,38 @@ interface RunArguments {
   timeoutMs?: number;
   minConfidence?: number;
   prompt?: string;
+  ocrBackend?: OcrBackend;
+  mixOcrContextTokens?: number;
 }
 
 function isVisionOcrEngine(value: string): value is VisionOcrEngineType {
   return (VISION_OCR_ENGINES as readonly string[]).includes(value);
 }
 
-function parseRunArguments(args: string[]): RunArguments {
+export function parseRunArguments(args: string[]): RunArguments {
   const parsed: RunArguments = { mode: "ocr", web: false, json: false };
   const positional: string[] = [];
+  let explicitMode: VisionMode | null = null;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
       parsed.json = true;
-    } else if (arg === "--vlm") {
-      parsed.mode = "vlm";
-    } else if (arg === "--mix") {
-      parsed.mode = "mix";
+    } else if (arg === "--vlm" || arg === "--mix") {
+      const requestedMode: VisionMode = arg === "--vlm" ? "vlm" : "mix";
+      if (explicitMode && explicitMode !== requestedMode) {
+        throw new VcliError("INVALID_ARGUMENT", "--vlm 与 --mix 不能同时使用", 2);
+      }
+      explicitMode = requestedMode;
+      parsed.mode = requestedMode;
     } else if (arg === "-p" || arg === "--prompt") {
       parsed.prompt = requireOptionValue(args, index, arg);
+      index += 1;
+    } else if (arg === "--ocr-backend") {
+      const value = requireOptionValue(args, index, arg);
+      if (value !== "cpu" && value !== "gpu") {
+        throw new VcliError("INVALID_ARGUMENT", "--ocr-backend 仅支持 cpu 或 gpu", 2);
+      }
+      parsed.ocrBackend = value;
       index += 1;
     } else if (arg === "--ocr") {
       const value = requireOptionValue(args, index, arg);
@@ -146,6 +180,17 @@ function parseRunArguments(args: string[]): RunArguments {
       index += 1;
     } else if (arg === "-w" || arg === "--web") {
       parsed.web = true;
+    } else if (arg === "--mix-ocr-context-tokens") {
+      const value = Number(requireOptionValue(args, index, arg));
+      index += 1;
+      if (!Number.isInteger(value) || value < 0 || value > MIX_OCR_CONTEXT_TOKENS_MAX) {
+        throw new VcliError(
+          "INVALID_ARGUMENT",
+          `--mix-ocr-context-tokens 必须是 0~${MIX_OCR_CONTEXT_TOKENS_MAX} 的整数`,
+          2,
+        );
+      }
+      parsed.mixOcrContextTokens = value;
     } else if (arg === "--timeout") {
       const seconds = Number(requireOptionValue(args, index, arg));
       index += 1;
@@ -165,6 +210,18 @@ function parseRunArguments(args: string[]): RunArguments {
     } else if (arg !== undefined) {
       positional.push(arg);
     }
+  }
+  if (positional.length > 1) {
+    throw new VcliError("INVALID_ARGUMENT", `只能指定一个图片路径，多余参数：${positional.slice(1).join(" ")}`, 2);
+  }
+  if (parsed.prompt && parsed.mode === "ocr") {
+    throw new VcliError("INVALID_ARGUMENT", "--prompt 仅用于 --vlm / --mix 模式", 2);
+  }
+  if (parsed.ocrBackend && parsed.mode === "vlm") {
+    throw new VcliError("INVALID_ARGUMENT", "纯 VLM 模式不使用 OCR，请勿传入 --ocr-backend", 2);
+  }
+  if (parsed.mixOcrContextTokens !== undefined && parsed.mode !== "mix") {
+    throw new VcliError("INVALID_ARGUMENT", "--mix-ocr-context-tokens 仅用于 --mix 模式", 2);
   }
   if (positional.length > 0) {
     const first = positional[0];
@@ -234,27 +291,111 @@ async function promptWorkspaceSelection(configStore: ConfigStore): Promise<strin
   return resolved;
 }
 
+interface InitArguments {
+  yes: boolean;
+  resetWorkspace: boolean;
+  workspace?: string;
+  computeMode?: ComputeMode;
+  capabilities?: ComputeCapability;
+  ocrBackend?: OcrBackend;
+  vlmModelOption?: VlmModelOptionId;
+  vlmQuantization?: VlmQuantization;
+}
+
+export function parseInitArguments(args: string[]): InitArguments {
+  const parsed: InitArguments = { yes: false, resetWorkspace: false };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--yes") {
+      parsed.yes = true;
+    } else if (arg === "--reset-workspace") {
+      parsed.resetWorkspace = true;
+    } else if (arg === "--workspace") {
+      parsed.workspace = requireOptionValue(args, index, arg);
+      index += 1;
+    } else if (arg === "--compute") {
+      const value = requireOptionValue(args, index, arg);
+      if (value !== "cpu" && value !== "gpu") {
+        throw new VcliError("INVALID_ARGUMENT", "--compute 仅支持 cpu 或 gpu", 2);
+      }
+      parsed.computeMode = value;
+      index += 1;
+    } else if (arg === "--capabilities") {
+      const value = requireOptionValue(args, index, arg);
+      if (!(COMPUTE_CAPABILITIES as readonly string[]).includes(value)) {
+        throw new VcliError("INVALID_ARGUMENT", "--capabilities 仅支持 ocr、vlm 或 both", 2);
+      }
+      parsed.capabilities = value as ComputeCapability;
+      index += 1;
+    } else if (arg === "--ocr-backend") {
+      const value = requireOptionValue(args, index, arg);
+      if (!(OCR_BACKENDS as readonly string[]).includes(value)) {
+        throw new VcliError("INVALID_ARGUMENT", "--ocr-backend 仅支持 cpu 或 gpu", 2);
+      }
+      parsed.ocrBackend = value as OcrBackend;
+      index += 1;
+    } else if (arg === "--vlm-option") {
+      const value = requireOptionValue(args, index, arg).toUpperCase();
+      if (!VLM_MODEL_OPTIONS.some((option) => option.id === value)) {
+        throw new VcliError("INVALID_ARGUMENT", "--vlm-option 仅支持 A1、A2、B1、B2、C1、C2", 2);
+      }
+      parsed.vlmModelOption = value as VlmModelOptionId;
+      index += 1;
+    } else if (arg === "--quant") {
+      const value = requireOptionValue(args, index, arg);
+      if (value !== "bf16" && value !== "awq") {
+        throw new VcliError("INVALID_ARGUMENT", "--quant 仅支持 bf16 或 awq", 2);
+      }
+      parsed.vlmQuantization = value;
+      index += 1;
+    } else {
+      throw new VcliError("INVALID_ARGUMENT", `未知 init 参数：${arg}`, 2);
+    }
+  }
+
+  if (parsed.computeMode === "cpu" && parsed.capabilities && parsed.capabilities !== "ocr") {
+    throw new VcliError("INVALID_ARGUMENT", "CPU 模式仅支持 OCR 能力", 2);
+  }
+  if (parsed.computeMode === "cpu" && parsed.ocrBackend === "gpu") {
+    throw new VcliError("INVALID_ARGUMENT", "CPU 模式不能使用 GPU OCR", 2);
+  }
+  if (parsed.computeMode === "cpu" && (parsed.vlmModelOption || parsed.vlmQuantization)) {
+    throw new VcliError("INVALID_ARGUMENT", "CPU 模式不能安装 VLM 量化版本", 2);
+  }
+  if (parsed.capabilities === "ocr" && (parsed.vlmModelOption || parsed.vlmQuantization)) {
+    throw new VcliError("INVALID_ARGUMENT", "仅 OCR 能力不需要 --quant", 2);
+  }
+  if (parsed.vlmModelOption && parsed.vlmQuantization) {
+    throw new VcliError("INVALID_ARGUMENT", "--vlm-option 与 --quant 不能同时使用", 2);
+  }
+  if (parsed.capabilities === "vlm" && parsed.ocrBackend) {
+    throw new VcliError("INVALID_ARGUMENT", "仅 VLM 能力不需要 --ocr-backend", 2);
+  }
+  return parsed;
+}
+
 async function runInitCommand(
   configStore: ConfigStore,
   stateStore: VisionStateStore,
   args: string[],
 ): Promise<void> {
-  const yes = args.includes("--yes");
-  const resetWorkspace = args.includes("--reset-workspace");
-  const workspaceFlagIdx = args.indexOf("--workspace");
-  const workspaceFlagValue = workspaceFlagIdx >= 0 ? args[workspaceFlagIdx + 1] : undefined;
+  if (args.includes("-h") || args.includes("--help")) {
+    stdout.write(HELP);
+    return;
+  }
+  const parsed = parseInitArguments(args);
 
   // 优先级：--workspace <path> > 交互选择 > 已有配置 > 默认路径
-  if (workspaceFlagValue) {
-    const resolved = await resolveWorkspacePath(workspaceFlagValue);
+  if (parsed.workspace) {
+    const resolved = await resolveWorkspacePath(parsed.workspace);
     await configStore.setWorkspace(resolved);
     stdout.write(`工作区已设置为：${resolved}\n`);
   } else {
     // 选择工作区路径（首次 init 或 --reset-workspace 时提示）
     const currentWorkspace = await configStore.getWorkspace();
     const configExists = currentWorkspace !== getConfigRoot();
-    if (!configExists || resetWorkspace) {
-      if (yes) {
+    if (!configExists || parsed.resetWorkspace) {
+      if (parsed.yes) {
         // --yes 模式使用默认路径或已有路径
         if (!configExists) {
           await configStore.setWorkspace(currentWorkspace);
@@ -269,11 +410,25 @@ async function runInitCommand(
   // 用工作区路径构造 stateStore，使其读写工作区下的 state.json
   const workspaceStateStore = new VisionStateStore(workspace);
   await installVisionFeature(workspaceStateStore, workspace, {
-    yes,
+    yes: parsed.yes,
     prompt: async (message: string) => promptText(message),
+    ...(parsed.computeMode ? { computeMode: parsed.computeMode } : {}),
+    ...(parsed.capabilities ? { capabilities: parsed.capabilities } : {}),
+    ...(parsed.ocrBackend ? { ocrBackend: parsed.ocrBackend } : {}),
+    ...(parsed.vlmModelOption ? { vlmModelOption: parsed.vlmModelOption } : {}),
+    ...(parsed.vlmQuantization ? { vlmQuantization: parsed.vlmQuantization } : {}),
   });
   await configStore.setInitialized();
   stdout.write(`code-vcli 视觉模型环境已就绪。\n工作区：${workspace}\n`);
+}
+
+export function supportsVisionMode(
+  capabilities: ComputeCapability,
+  mode: VisionMode,
+): boolean {
+  if (mode === "mix") return capabilities === "both";
+  if (mode === "vlm") return capabilities === "vlm" || capabilities === "both";
+  return capabilities === "ocr" || capabilities === "both";
 }
 
 async function runRunCommand(
@@ -308,26 +463,22 @@ async function runRunCommand(
   // 能力门控：依据已安装的能力校验 --vlm/--mix
   const visionState = await stateStore.read();
   const capabilities: ComputeCapability = visionState?.capabilities ?? "ocr";
-  if (mode === "vlm" && !capabilities.includes("vlm")) {
-    throw new VcliError(
-      "MODEL_CAPABILITY_MISSING",
-      "当前未安装 VLM 能力。请运行 code-vcli init 并选择 仅VLM 或 都要（GPU 模式）。",
-      6,
-    );
+  if (parsed.ocrBackend && mode === "vlm") {
+    throw new VcliError("INVALID_ARGUMENT", "纯 VLM 模式不使用 OCR，请勿传入 --ocr-backend", 2);
   }
-  if (mode === "mix" && capabilities !== "both") {
-    if (capabilities === "ocr") {
-      throw new VcliError(
-        "MODEL_CAPABILITY_MISSING",
-        "--mix 需要同时拥有 OCR 与 VLM 能力。请运行 code-vcli init 并选择 都要（GPU 模式）。",
-        6,
-      );
-    }
-    throw new VcliError(
-      "MODEL_CAPABILITY_MISSING",
-      "--mix 需要同时拥有 OCR 与 VLM 能力。当前仅安装了 VLM，尚缺 OCR。请重新运行 code-vcli init 并选择 都要。",
-      6,
-    );
+  if (parsed.mixOcrContextTokens !== undefined && mode !== "mix") {
+    throw new VcliError("INVALID_ARGUMENT", "--mix-ocr-context-tokens 仅用于 --mix 模式", 2);
+  }
+  if (parsed.ocrBackend === "gpu" && visionState?.computeMode !== "gpu") {
+    throw new VcliError("MODEL_CAPABILITY_MISSING", "当前环境不是 GPU 安装，不能覆盖为 GPU OCR", 6);
+  }
+  if (!supportsVisionMode(capabilities, mode)) {
+    const message = mode === "mix"
+      ? "--mix 需要同时安装 OCR 与 VLM。请运行 code-vcli init 并选择 both。"
+      : mode === "vlm"
+        ? "当前未安装 VLM 能力。请运行 code-vcli init 并选择 vlm 或 both。"
+        : "当前未安装 OCR 能力。请运行 code-vcli init 并选择 ocr 或 both。";
+    throw new VcliError("MODEL_CAPABILITY_MISSING", message, 6);
   }
 
   const modeDesc = mode === "ocr"
@@ -340,29 +491,98 @@ async function runRunCommand(
     ...(parsed.minConfidence !== undefined ? { minConfidence: parsed.minConfidence } : {}),
     ...(mode !== "ocr" ? { mode } : {}),
     ...(parsed.prompt ? { prompt: parsed.prompt } : {}),
+    ...(parsed.ocrBackend ? { ocrBackend: parsed.ocrBackend } : {}),
+    ...(parsed.mixOcrContextTokens !== undefined
+      ? { mixOcrContextTokens: parsed.mixOcrContextTokens }
+      : {}),
   });
 
   if (parsed.json) {
-    const payload = {
-      text: result.text,
-      ...(mode !== "ocr" && result.intent ? { intent: result.intent } : {}),
-      ...(mode !== "ocr" && result.summary ? { summary: result.summary } : {}),
-      ...(mode !== "ocr" && result.elements ? { elements: result.elements } : {}),
-      ...(mode !== "ocr" && result.raw ? { raw: result.raw } : {}),
-      ...(mode !== "ocr" && result.engine ? { engine: result.engine } : {}),
-      ...(mode !== "ocr" && result.mode ? { mode: result.mode } : {}),
-      items: result.items,
-      ...(result.layout ? { layout: result.layout } : {}),
-    };
-
-    // 保存 JSON 到工作区 files 文件夹
     const { mkdir, writeFile } = await import("node:fs/promises");
     const filesDir = path.join(stateStore.directory, "files");
     await mkdir(filesDir, { recursive: true });
     const imageName = path.basename(imagePath, path.extname(imagePath));
-    const outputPath = path.join(filesDir, `${imageName}_output.json`);
-    await writeFile(outputPath, JSON.stringify(payload, null, 2), "utf8");
-    stdout.write(`${outputPath}\n`);
+    const effectiveOcrBackend = parsed.ocrBackend ?? visionState?.ocrBackend ?? "cpu";
+    const outputSuffix = `${mode}${mode === "mix" ? `_${effectiveOcrBackend}` : ""}${webMode ? "_web" : ""}`;
+
+    let inlineText = result.text;
+    let inlineItems = result.items;
+    let ocrMetadata: Record<string, unknown> | undefined;
+    if (mode === "ocr") {
+      const itemChars = JSON.stringify(result.items).length;
+      const isLargeOcr = result.text.length > 50_000 || itemChars > 50_000 || result.items.length > 500;
+      if (isLargeOcr) {
+        const textArtifact = path.join(filesDir, `${imageName}_${outputSuffix}_text.txt`);
+        const itemsArtifact = path.join(filesDir, `${imageName}_${outputSuffix}_items.json`);
+        await writeFile(textArtifact, result.text, "utf8");
+        await writeFile(
+          itemsArtifact,
+          JSON.stringify({
+            itemCount: result.items.length,
+            items: result.items,
+            ...(result.layout ? { layout: result.layout } : {}),
+          }),
+          "utf8",
+        );
+        inlineText = `${result.text.slice(0, 20_000)}
+...[完整文字见 artifact]...
+${result.text.slice(-2_000)}`;
+        inlineItems = result.items.slice(0, 80);
+        ocrMetadata = {
+          itemCount: result.items.length,
+          inlineItemCount: inlineItems.length,
+          textTruncated: true,
+          itemsTruncated: true,
+          artifacts: { text: textArtifact, items: itemsArtifact },
+        };
+      }
+    } else if (mode === "mix") {
+      const ocrTextPath = path.join(filesDir, `${imageName}_${outputSuffix}_ocr.txt`);
+      const ocrItemsPath = path.join(filesDir, `${imageName}_${outputSuffix}_ocr_items.json`);
+      await writeFile(ocrTextPath, result.ocrText ?? "", "utf8");
+      await writeFile(
+        ocrItemsPath,
+        JSON.stringify({
+          itemCount: result.items.length,
+          items: result.items,
+          ...(result.layout ? { layout: result.layout } : {}),
+        }),
+        "utf8",
+      );
+
+      const itemChars = JSON.stringify(result.items).length;
+      const itemsTruncated = result.items.length > 200 || itemChars > 50_000;
+      if (itemsTruncated) inlineItems = result.items.slice(0, 80);
+      ocrMetadata = {
+        itemCount: result.items.length,
+        inlineItemCount: inlineItems.length,
+        itemsTruncated,
+        artifacts: {
+          text: ocrTextPath,
+          items: ocrItemsPath,
+        },
+        ...(result.ocrContext ? { context: result.ocrContext } : {}),
+      };
+    }
+
+    const payload = {
+      text: inlineText,
+      ...(mode !== "ocr" && result.intent ? { intent: result.intent } : {}),
+      ...(mode !== "ocr" && result.summary ? { summary: result.summary } : {}),
+      ...(mode !== "ocr" && result.elements ? { elements: result.elements } : {}),
+      ...(mode !== "ocr" && result.raw ? { raw: result.raw } : {}),
+      ...(result.engine ? { engine: result.engine } : {}),
+      ...(result.mode ? { mode: result.mode } : {}),
+      items: inlineItems,
+      ...(result.layout ? { layout: result.layout } : {}),
+      ...(ocrMetadata ? { ocr: ocrMetadata } : {}),
+    };
+
+    const outputPath = path.join(filesDir, `${imageName}_${outputSuffix}_output.json`);
+    // 紧凑 JSON 可显著减少无视觉 Agent 读取时的无意义空白 token。
+    await writeFile(outputPath, JSON.stringify(payload), "utf8");
+    stdout.write(`${outputPath}
+`);
   } else {
     stdout.write(`${result.text}\n`);
   }
@@ -416,6 +636,7 @@ async function runInfoCommand(
     `计算模式：${visionState?.computeMode ?? "—"}`,
     `能力组合：${describeCapabilities(visionState?.capabilities ?? "ocr")}`,
     `OCR 放置：${visionState?.ocrBackend ?? "—"}`,
+    `VLM 选项：${visionState?.vlmModelOption ?? "—"}`,
     `VLM 量化：${visionState?.vlmQuantization ?? "—"}`,
     "",
     "OCR 引擎",
@@ -454,6 +675,7 @@ function describeCurrentCapabilities(
     `  计算模式：${state.computeMode === "gpu" ? "GPU" : "CPU"}`,
     `  能力组合：${describeCapabilities(state.capabilities)}`,
     ...(state.ocrBackend ? [`  OCR 放置：${state.ocrBackend === "gpu" ? "GPU" : "CPU"}`] : []),
+    ...(state.vlmModelOption ? [`  VLM 选项：${state.vlmModelOption}`] : []),
     ...(state.vlmQuantization ? [`  VLM 量化：${state.vlmQuantization}`] : []),
   ].join("\n");
 }
@@ -665,13 +887,28 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  const vcliError = toVcliError(error);
-  const jsonOutput = process.argv.includes("--json");
-  if (jsonOutput) {
-    stderr.write(`${JSON.stringify({ ok: false, error: { code: vcliError.code, message: vcliError.message } })}\n`);
-  } else {
-    stderr.write(`错误 [${vcliError.code}]：${vcliError.message}\n`);
+
+function resolveEntryRealPath(value: string): string {
+  if (!value) return "";
+  try {
+    return realpathSync.native(path.resolve(value));
+  } catch {
+    return path.resolve(value);
   }
-  process.exitCode = vcliError.exitCode;
-});
+}
+
+const entryPath = resolveEntryRealPath(process.argv[1] ?? "");
+const modulePath = resolveEntryRealPath(fileURLToPath(import.meta.url));
+const isDirectExecution = entryPath === modulePath;
+if (isDirectExecution) {
+  main().catch((error: unknown) => {
+    const vcliError = toVcliError(error);
+    const jsonOutput = process.argv.includes("--json");
+    if (jsonOutput) {
+      stderr.write(`${JSON.stringify({ ok: false, error: { code: vcliError.code, message: vcliError.message } })}\n`);
+    } else {
+      stderr.write(`错误 [${vcliError.code}]：${vcliError.message}\n`);
+    }
+    process.exitCode = vcliError.exitCode;
+  });
+}

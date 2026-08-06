@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { cp, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import nodeOs from "node:os";
 import { promisify } from "node:util";
 import { stdout, stderr } from "node:process";
 
@@ -21,9 +22,10 @@ import {
   OMNIPARSER_MODEL_DISPLAY,
   PPOCR_MODEL_DISPLAY,
   VLM_MODEL_DISPLAY,
-  VLM_DOWNLOAD_SIZE_ESTIMATE,
   VISION_DOWNLOAD_SIZE_ESTIMATE,
-  recommendVlmQuant,
+  getVlmModelOption,
+  getVlmOptionForLegacyQuant,
+  VLM_MODEL_OPTIONS,
   TORCH_CPU_INDEX,
   TORCH_CUDA_INDEX,
   TORCH_ROCM_INDEX,
@@ -35,7 +37,9 @@ import {
   type ComputeOption,
   type ComputeCapability,
   type OcrBackend,
-  type VlmQuantOption,
+  type VlmModelOption,
+  type VlmModelOptionId,
+  type VlmQuantization,
 } from "./constants.js";
 import { VcliError } from "../errors.js";
 import { getVenvPython, runModelSelfTest, runModelInit } from "./python-bridge.js";
@@ -140,14 +144,19 @@ async function detectAppleGpu(): Promise<{
     const vramMatch = typeof gpu?.spdisplays_vram === "string"
       ? gpu.spdisplays_vram.match(/(\d+(?:\.\d+)?)\s*GB/i)
       : null;
-    const vramGb = vramMatch ? Number.parseFloat(vramMatch[1] ?? "") : Number.NaN;
+    const parsedVramGb = vramMatch ? Number.parseFloat(vramMatch[1] ?? "") : Number.NaN;
+    const unifiedMemoryGb = nodeOs.totalmem() / 1024 / 1024 / 1024;
+    const vramGb = Number.isFinite(parsedVramGb) && parsedVramGb > 0
+      ? parsedVramGb
+      : unifiedMemoryGb;
     return {
       gpuVendor: "apple",
       ...(name ? { gpuName: name } : {}),
-      ...(Number.isFinite(vramGb) && vramGb > 0 ? { gpuVramGb: vramGb } : {}),
+      ...(vramGb > 0 ? { gpuVramGb: vramGb } : {}),
     };
   } catch {
-    return { gpuVendor: "apple" };
+    const unifiedMemoryGb = nodeOs.totalmem() / 1024 / 1024 / 1024;
+    return { gpuVendor: "apple", ...(unifiedMemoryGb > 0 ? { gpuVramGb: unifiedMemoryGb } : {}) };
   }
 }
 
@@ -278,7 +287,7 @@ export function checkComputeCompatibility(
   const { os, arch, gpuVendor } = platform;
 
   if (gpuVendor === "nvidia") {
-    if (os === "windows" || os === "linux") {
+    if ((os === "windows" || os === "linux") && arch === "x64") {
       return {
         compatible: true,
         option: {
@@ -289,7 +298,7 @@ export function checkComputeCompatibility(
         },
       };
     }
-    return { compatible: false, reason: `NVIDIA GPU 仅支持 Windows 和 Linux，当前系统：${os}` };
+    return { compatible: false, reason: `NVIDIA GPU 安装仅支持 Windows/Linux x64，当前：${os} ${arch}` };
   }
 
   if (gpuVendor === "apple") {
@@ -308,7 +317,7 @@ export function checkComputeCompatibility(
   }
 
   if (gpuVendor === "amd") {
-    if (os === "linux") {
+    if (os === "linux" && arch === "x64") {
       return {
         compatible: true,
         option: {
@@ -319,7 +328,7 @@ export function checkComputeCompatibility(
         },
       };
     }
-    return { compatible: false, reason: `AMD GPU (ROCm) 仅支持 Linux，当前系统：${os}` };
+    return { compatible: false, reason: `AMD GPU (ROCm) 仅支持 Linux x64，当前：${os} ${arch}` };
   }
 
   return { compatible: false, reason: "未检测到兼容的 GPU，请选择 CPU 模式" };
@@ -366,6 +375,8 @@ export async function installVisionFeature(
     computeMode?: ComputeMode;
     capabilities?: ComputeCapability;
     ocrBackend?: OcrBackend;
+    vlmModelOption?: VlmModelOptionId;
+    vlmQuantization?: VlmQuantization;
   },
 ): Promise<InstallResult> {
   const existing = await stateStore.read();
@@ -432,17 +443,35 @@ export async function installVisionFeature(
     }
   }
 
-  // 7. GPU 且能力含 VLM 时，检测显存 → 推荐量化 → 强制确认（--yes 也不跳过）
-  let vlmQuantization: string | undefined;
+  // 7. GPU 且能力含 VLM 时，从 A1-A2/B1-B2/C1-C2 中选择。
+  let vlmOption: VlmModelOption | undefined;
   if (computeMode === "gpu" && capabilities !== "ocr") {
-    // 能力未变化且已有量化时复用，避免重复确认
-    if (existingReady && existing.capabilities === capabilities && existing.vlmQuantization) {
-      vlmQuantization = existing.vlmQuantization;
+    const requestedOption = options.vlmModelOption
+      ? getVlmModelOption(options.vlmModelOption)
+      : options.vlmQuantization
+        ? getVlmOptionForLegacyQuant(options.vlmQuantization)
+        : null;
+    const existingOption = existing?.vlmModelOption
+      ? getVlmModelOption(existing.vlmModelOption)
+      : existing?.vlmQuantization
+        ? getVlmOptionForLegacyQuant(existing.vlmQuantization as VlmQuantization)
+        : null;
+
+    if (requestedOption) {
+      vlmOption = await confirmVlmModelOption(
+        requestedOption,
+        platform,
+        options.prompt,
+        options.yes,
+      );
+    } else if (existingReady && existing.capabilities !== "ocr" && existingOption) {
+      vlmOption = existingOption;
     } else {
-      const quant = await selectVlmQuantization(platform, options.prompt);
-      vlmQuantization = quant.id;
+      vlmOption = await selectVlmModelOption(platform, options.prompt, options.yes);
     }
   }
+  const vlmModelOption = vlmOption?.id;
+  const vlmQuantization = vlmOption?.quantization;
 
   // 8. 目标与当前能力完全一致 → 仅同步脚本，不做变更
   if (
@@ -450,7 +479,7 @@ export async function installVisionFeature(
     && existing.computeMode === computeMode
     && existing.capabilities === capabilities
     && existing.ocrBackend === ocrBackend
-    && existing.vlmQuantization === vlmQuantization
+    && (existing.vlmModelOption ?? getVlmOptionForLegacyQuant((existing.vlmQuantization ?? "awq") as VlmQuantization).id) === vlmModelOption
   ) {
     await syncRuntimeScripts(configRoot);
     return {
@@ -467,9 +496,9 @@ export async function installVisionFeature(
   const wantsVlm = capabilities !== "ocr";
   const modelDescParts: string[] = [];
   if (wantsOcr) modelDescParts.push(`${PPOCR_MODEL_DISPLAY} + ${OMNIPARSER_MODEL_DISPLAY}`);
-  if (wantsVlm) modelDescParts.push(`${VLM_MODEL_DISPLAY}（${vlmQuantization ?? "bf16"}）`);
-  const downloadSize = wantsVlm
-    ? `${VISION_DOWNLOAD_SIZE_ESTIMATE} + ${VLM_DOWNLOAD_SIZE_ESTIMATE}`
+  if (wantsVlm && vlmOption) modelDescParts.push(vlmOption.display);
+  const downloadSize = wantsVlm && vlmOption
+    ? `${VISION_DOWNLOAD_SIZE_ESTIMATE} + ${vlmOption.downloadSize}`
     : VISION_DOWNLOAD_SIZE_ESTIMATE;
 
   if (!options.yes) {
@@ -483,7 +512,7 @@ export async function installVisionFeature(
       `Python：${pythonInfo.version}`,
       `计算模式：${computeOption.description}`,
       wantsOcr ? `OCR 放置：${ocrBackend ?? "cpu"}` : null,
-      wantsVlm ? `VLM 量化：${vlmQuantization ?? "bf16"}` : null,
+      wantsVlm && vlmOption ? `VLM 选项：${vlmOption.display}` : null,
       "",
       "是否开始安装？ [y/n] ",
     ].filter((line): line is string => line !== null).join("\n");
@@ -541,10 +570,14 @@ export async function installVisionFeature(
     for (const reqDst of requirementsDsts) {
       await installRequirements(venvPython, reqDst);
     }
+    const wantsAwq = wantsVlm && vlmOption?.quantization === "awq";
+    if (wantsAwq) {
+      await installAwqRuntime(venvPython);
+    }
 
     // 12. 验证核心依赖可导入且版本正确
     stdout.write("验证 Python 环境…\n");
-    await verifyImports(venvPython, wantsOcr, wantsVlm);
+    await verifyImports(venvPython, wantsOcr, wantsVlm, wantsAwq);
 
     // 13. 复制推理脚本
     const scriptSrc = path.join(resourcesDir, VISION_SCRIPT_FILE_NAME);
@@ -554,12 +587,27 @@ export async function installVisionFeature(
     // 14. 下载模型（按能力范围）
     await stateStore.writeStatus("downloading", pythonInfo.version);
     stdout.write("正在下载模型，请耐心等待…\n");
-    await runModelInit(venvPython, scriptDst, configRoot, capabilities, vlmQuantization);
+    await runModelInit(
+      venvPython,
+      scriptDst,
+      configRoot,
+      capabilities,
+      vlmModelOption,
+      ocrBackend ?? "cpu",
+      computeMode === "gpu",
+    );
 
     // 15. 自检
     await stateStore.writeStatus("verifying", pythonInfo.version);
     stdout.write("正在验证模型…\n");
-    const verified = await runModelSelfTest(venvPython, scriptDst, configRoot, capabilities);
+    const verified = await runModelSelfTest(
+      venvPython,
+      scriptDst,
+      configRoot,
+      capabilities,
+      ocrBackend ?? "cpu",
+      computeMode === "gpu",
+    );
     if (!verified) {
       throw new VcliError("MODEL_INITIALIZATION_FAILED", "模型自检失败，可能未正确安装", 6);
     }
@@ -584,6 +632,7 @@ export async function installVisionFeature(
       computeMode,
       capabilities,
       ...(ocrBackend ? { ocrBackend } : {}),
+      ...(vlmModelOption ? { vlmModelOption } : {}),
       ...(vlmQuantization ? { vlmQuantization } : {}),
     });
 
@@ -726,47 +775,162 @@ async function promptOcrBackend(
 // ---------------------------------------------------------------------------
 // VLM 量化选择（显存检测 + 推荐 + 强制确认，--yes 也不跳过）
 // ---------------------------------------------------------------------------
-async function selectVlmQuantization(
+async function getDetectedVramGb(platform: PlatformInfo): Promise<number | null> {
+  return platform.gpuVramGb ?? (await detectGpuVramGb());
+}
+
+function getModelPlatformIssue(option: VlmModelOption, platform: PlatformInfo): string | null {
+  if (option.quantization !== "awq") return null;
+  if (platform.gpuVendor !== "nvidia" || (platform.os !== "windows" && platform.os !== "linux")) {
+    return "AWQ 当前仅支持 Windows/Linux 的 NVIDIA CUDA 环境；Apple MPS 与 AMD ROCm 请选 BF16（A1/B1/C1）";
+  }
+  return null;
+}
+
+function recommendCompatibleVlmOption(
+  vramGb: number,
+  platform: PlatformInfo,
+): VlmModelOption | null {
+  const preferredIds = ["C1", "C2", "B1", "B2", "A1", "A2"];
+  const usableVramGb = platform.gpuVendor === "apple" ? Math.max(0, vramGb - 4) : vramGb;
+  for (const id of preferredIds) {
+    const option = getVlmModelOption(id)!;
+    if (!getModelPlatformIssue(option, platform) && usableVramGb >= option.minVramGb) return option;
+  }
+  return null;
+}
+
+function getModelRisk(option: VlmModelOption, vramGb: number | null): string | null {
+  if (vramGb === null) {
+    return `无法读取显存，无法确认是否满足 ${option.minVramGb}GB 的建议要求。`;
+  }
+  if (vramGb < option.minVramGb) {
+    return `当前显存约 ${vramGb.toFixed(1)}GB，低于 ${option.display} 建议的 ${option.minVramGb}GB，可能发生显存不足或推理失败。`;
+  }
+  return null;
+}
+
+async function confirmVlmModelOption(
+  option: VlmModelOption,
   platform: PlatformInfo,
   prompt: (message: string) => Promise<string>,
-): Promise<VlmQuantOption> {
-  const vramGb = platform.gpuVramGb ?? (await detectGpuVramGb());
-  if (vramGb === null) {
-    throw new VcliError(
-      "MODEL_INITIALIZATION_FAILED",
-      `检测显卡显存失败（${platform.gpuName ?? "未知显卡"}）。${VLM_MODEL_DISPLAY} 需要 8GB+ 显存，请确认 GPU 正常或改用 CPU/OCR 模式。`,
-      6,
-    );
+  yes: boolean,
+): Promise<VlmModelOption> {
+  const platformIssue = getModelPlatformIssue(option, platform);
+  if (platformIssue) {
+    throw new VcliError("MODEL_INITIALIZATION_FAILED", `${option.display} 不支持当前平台：${platformIssue}`, 6);
   }
-  stdout.write(`检测到显存：约 ${vramGb.toFixed(0)} GB\n`);
+  const vramGb = await getDetectedVramGb(platform);
+  const risk = getModelRisk(option, vramGb);
+  if (!risk) return option;
 
-  const recommended = recommendVlmQuant(vramGb);
-  if (!recommended) {
-    throw new VcliError(
-      "MODEL_INITIALIZATION_FAILED",
-      `显存约 ${vramGb.toFixed(0)} GB，低于 Qwen2.5-VL 8GB 的最低要求。请改用 CPU/OCR 模式或升级显卡。`,
-      6,
-    );
+  stderr.write(`警告：${risk}\n`);
+  if (yes) {
+    stderr.write("已通过命令行明确指定 VLM 选项，继续安装。\n");
+    return option;
   }
 
-  // 强制确认：即便 --yes 也不跳过
-  const message = [
-    `推荐 VLM 量化方式：${recommended.display}`,
-    "",
-    `  说明：${recommended.description}`,
-    "",
-    "确认使用该量化方式？ [y/n] ",
-  ].join("\n");
   let answer: boolean | null = null;
-  let currentPrompt = message;
+  let message = `仍然安装 ${option.display}？ [y/n] `;
   while (answer === null) {
-    answer = parseYesNo(await prompt(currentPrompt));
-    currentPrompt = "确认使用该量化方式？ [y/n] ";
+    answer = parseYesNo(await prompt(message));
+    message = "请输入 y 或 n：";
   }
-  if (answer !== true) {
-    throw new VcliError("MODEL_INSTALL_DECLINED", "用户未确认 VLM 量化方式", 6);
+  if (!answer) {
+    throw new VcliError("MODEL_INSTALL_DECLINED", "用户取消安装超出本机建议能力的 VLM 选项", 6);
   }
-  return recommended;
+  return option;
+}
+
+function buildVlmSelectionMessage(
+  recommended: VlmModelOption | null,
+  vramGb: number | null,
+  platform: PlatformInfo,
+): string {
+  const rows = VLM_MODEL_OPTIONS.map((option) => {
+    const platformIssue = getModelPlatformIssue(option, platform);
+    const risk = platformIssue ?? getModelRisk(option, vramGb);
+    const marker = recommended?.id === option.id ? "（推荐）" : "";
+    const availability = risk ? `\n     警告：${risk}` : "";
+    return `  ${option.id}. ${option.display.replace(`${option.id} — `, "")}${marker}\n     ${option.description}；下载 ${option.downloadSize}${availability}`;
+  });
+  return [
+    "请选择要安装的 Qwen2.5-VL 模型（仅允许以下六项）：",
+    "",
+    ...rows,
+    "",
+    "请输入 A1、A2、B1、B2、C1 或 C2：",
+  ].join("\n");
+}
+
+export async function selectVlmModelOption(
+  platform: PlatformInfo,
+  prompt: (message: string) => Promise<string>,
+  yes: boolean,
+): Promise<VlmModelOption> {
+  const vramGb = await getDetectedVramGb(platform);
+  stdout.write(vramGb === null
+    ? "未能读取显存容量，将由用户手动选择 VLM 模型。\n"
+    : `检测到显存：约 ${vramGb.toFixed(1)} GB\n`);
+
+  const recommended = vramGb === null ? null : recommendCompatibleVlmOption(vramGb, platform);
+  if (yes) {
+    if (!recommended) {
+      throw new VcliError(
+        "MODEL_INITIALIZATION_FAILED",
+        "无法安全自动选择 VLM 模型。请去掉 --yes 手动选择，或显式传入 --vlm-option A1..C2。",
+        6,
+      );
+    }
+    stdout.write(`自动选择推荐模型：${recommended.display}\n`);
+    return recommended;
+  }
+
+  if (recommended) {
+    const message = [
+      `推荐 VLM 模型：${recommended.display}`,
+      "",
+      `  说明：${recommended.description}`,
+      `  下载：${recommended.downloadSize}`,
+      "",
+      "确认使用推荐模型？ [y/n] ",
+    ].join("\n");
+    let answer: boolean | null = null;
+    let currentPrompt = message;
+    while (answer === null) {
+      answer = parseYesNo(await prompt(currentPrompt));
+      currentPrompt = "确认使用推荐模型？ [y/n] ";
+    }
+    if (answer) return recommended;
+    stdout.write("已拒绝推荐模型，请从全部六个选项中选择。\n");
+  } else {
+    stderr.write("警告：当前硬件没有满足建议显存的自动推荐项，请手动选择并确认风险。\n");
+  }
+
+  while (true) {
+    const input = (await prompt(buildVlmSelectionMessage(recommended, vramGb, platform))).trim().toUpperCase();
+    const selected = getVlmModelOption(input);
+    if (!selected) {
+      stderr.write("请输入 A1、A2、B1、B2、C1 或 C2。\n");
+      continue;
+    }
+    const platformIssue = getModelPlatformIssue(selected, platform);
+    if (platformIssue) {
+      stderr.write(`该模型不支持当前平台：${platformIssue}。请重新选择。\n`);
+      continue;
+    }
+    const risk = getModelRisk(selected, vramGb);
+    if (!risk) return selected;
+
+    let answer: boolean | null = null;
+    let currentPrompt = `警告：${risk}\n仍然选择 ${selected.display}？ [y/n] `;
+    while (answer === null) {
+      answer = parseYesNo(await prompt(currentPrompt));
+      currentPrompt = "请输入 y 或 n：";
+    }
+    if (answer) return selected;
+    stdout.write("已取消该模型，请重新选择。\n");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -831,6 +995,66 @@ async function installRequirements(venvPython: string, requirementsPath: string)
   }
 }
 
+async function runPip(
+  venvPython: string,
+  args: string[],
+  description: string,
+  timeoutMs = 600_000,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(venvPython, [
+      "-m", "pip", "install", "--disable-pip-version-check", "--no-input", ...args,
+    ], {
+      windowsHide: true,
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new Error(`${description}超时`));
+    }, timeoutMs);
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      code === 0 ? resolve() : reject(new Error(`${description}失败，pip 退出码 ${code ?? "unknown"}`));
+    });
+  });
+}
+
+async function installAwqRuntime(venvPython: string): Promise<void> {
+  stdout.write("安装 AWQ INT4 运行时…\n");
+  try {
+    if (process.platform === "win32") {
+      // 官方 triton 在 Windows 无 wheel，使用兼容的 triton-windows 提供同名 Python 模块。
+      await runPip(
+        venvPython,
+        ["--upgrade", "triton-windows==3.3.1.post21", "zstandard>=0.22.0", "datasets>=2.20"],
+        "安装 Windows AWQ 基础依赖",
+      );
+      // autoawq 声明依赖 triton 分发名；Windows 已由 triton-windows 提供模块，因此跳过依赖解析。
+      await runPip(
+        venvPython,
+        ["--upgrade", "--no-deps", "autoawq==0.2.9"],
+        "安装 AutoAWQ",
+      );
+    } else {
+      await runPip(venvPython, ["--upgrade", "autoawq==0.2.9"], "安装 AutoAWQ");
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new VcliError("MODEL_INSTALL_FAILED", `安装 AWQ 运行时失败：${detail}`, 6, { cause: error });
+  }
+}
+
 async function installTorch(venvPython: string, option: ComputeOption): Promise<void> {
   const pipArgs = ["-m", "pip", "install", "--upgrade", "--disable-pip-version-check", "--no-input"];
   if (option.torchIndex) {
@@ -870,11 +1094,17 @@ async function installTorch(venvPython: string, option: ComputeOption): Promise<
   }
 }
 
-async function verifyImports(venvPython: string, wantsOcr: boolean, wantsVlm: boolean): Promise<void> {
+async function verifyImports(
+  venvPython: string,
+  wantsOcr: boolean,
+  wantsVlm: boolean,
+  wantsAwq: boolean,
+): Promise<void> {
   const imports: string[] = [];
   imports.push("import torch, torchvision");
   if (wantsOcr) imports.push("import ultralytics, rapidocr");
   if (wantsVlm) imports.push("import transformers, qwen_vl_utils");
+  if (wantsAwq) imports.push("import awq, triton");
   const checkScript = [
     ...imports,
     "print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, cuda={torch.cuda.is_available()}, mps={getattr(torch.backends,\"mps\",None) and torch.backends.mps.is_available() if hasattr(torch.backends,\"mps\") else False}')",
