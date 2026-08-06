@@ -177,6 +177,7 @@ export async function runVisionInference(
     ...(output.intent ? { intent: output.intent } : {}),
     ...(output.summary ? { summary: output.summary } : {}),
     ...(output.elements ? { elements: output.elements } : {}),
+    ...(output.annotations ? { annotations: output.annotations } : {}),
     ...(output.raw ? { raw: output.raw } : {}),
     ...(output.engine ? { engine: output.engine } : {}),
     ...(output.ocr_text !== undefined ? { ocrText: output.ocr_text } : {}),

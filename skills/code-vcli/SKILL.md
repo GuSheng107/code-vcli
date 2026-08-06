@@ -194,7 +194,7 @@ Web 项：
 --mix                           OCR + VLM 顺序执行
 --web                           网页/UI YOLO 检测
 --json                          保存紧凑 JSON，stdout 仅返回文件路径
--p, --prompt <text>             VLM/Mix 问题
+-p, --prompt <text>             VLM/Mix 附加问题（拼接到默认提示词后）
 --ocr-backend <cpu|gpu>         本次 OCR/Mix 覆盖后端
 --mix-ocr-context-tokens <N>    0~32768，默认 16384
 --timeout <seconds>             推理超时

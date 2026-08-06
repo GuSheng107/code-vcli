@@ -35,7 +35,17 @@ export interface VisionItem {
 export interface VlmElement {
   role?: string;
   text?: string;
-  position?: string;
+  position?: [number, number] | string;
+}
+
+export interface VlmAnnotation {
+  text?: string;
+  position?: [number, number] | string;
+}
+
+export interface VlmLayoutInfo {
+  page_type?: string;
+  sections?: string[];
 }
 
 export interface OcrContextStats {
@@ -52,11 +62,12 @@ export interface OcrContextStats {
 export interface VisionRecognitionResult {
   text: string;
   items: VisionItem[];
-  layout?: VisionLayout;
+  layout?: VisionLayout | VlmLayoutInfo;
   mode?: VisionMode;
   intent?: string;
   summary?: string;
   elements?: VlmElement[];
+  annotations?: VlmAnnotation[];
   raw?: string;
   engine?: string;
   ocrText?: string;
@@ -111,6 +122,7 @@ export interface PythonOutput {
   intent?: string;
   summary?: string;
   elements?: VlmElement[];
+  annotations?: VlmAnnotation[];
   raw?: string;
   ocr_text?: string;
   ocr_context?: OcrContextStats;

@@ -212,7 +212,7 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
     --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
     --vlm                  使用 VLM 视觉理解
     --mix                  OCR + VLM 顺序执行（需已装 both）
--p, --prompt <text>        VLM/Mix 自定义问题
+-p, --prompt <text>        VLM/Mix 附加问题（拼接到默认提示词后）
 -w, --web                  网页/UI 场景
     --json                 输出紧凑 JSON 并返回文件路径
     --timeout <seconds>    推理超时

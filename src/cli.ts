@@ -85,7 +85,7 @@ Run Options:
       --ocr <ppocrv6>           OCR 引擎（默认 ppocrv6）
       --vlm                     纯 VLM 视觉理解
       --mix                     OCR 与 VLM 顺序执行，完整 OCR 另存 artifact
-  -p, --prompt <text>           VLM/Mix 自定义问题
+  -p, --prompt <text>           VLM/Mix 附加问题（拼接在默认提示词后）
   -w, --web                     YOLO 网页/UI 元素检测
       --json                    保存紧凑 JSON，stdout 返回文件路径
       --timeout <seconds>       推理超时
@@ -97,7 +97,7 @@ Run Options:
 
 Modes:
   OCR   PP-OCRv6；CPU 使用 OpenVINO，GPU 使用 RapidOCR Torch
-  VLM   Qwen2.5-VL；返回 intent、summary、elements
+  VLM   Qwen2.5-VL；返回 intent、summary、elements、annotations、layout
   Mix   CPU OCR + GPU VLM 或 GPU OCR + GPU VLM；OCR 后释放资源
         完整文字保存 *_ocr.txt，完整坐标保存 *_ocr_items.json
         主结果包含 artifact 路径和 OCR token 压缩统计
@@ -570,6 +570,9 @@ ${result.text.slice(-2_000)}`;
       ...(mode !== "ocr" && result.intent ? { intent: result.intent } : {}),
       ...(mode !== "ocr" && result.summary ? { summary: result.summary } : {}),
       ...(mode !== "ocr" && result.elements ? { elements: result.elements } : {}),
+      ...(mode !== "ocr" && result.annotations
+        ? { annotations: result.annotations }
+        : {}),
       ...(mode !== "ocr" && result.raw ? { raw: result.raw } : {}),
       ...(result.engine ? { engine: result.engine } : {}),
       ...(result.mode ? { mode: result.mode } : {}),

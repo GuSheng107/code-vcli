@@ -81,16 +81,44 @@ VLM_OPTIONS: dict[str, dict[str, str]] = {
 VLM_DIR = MODELS_DIR / "vlm"
 VLM_OPTION_FILE = VLM_DIR / ".vcli-model-option"
 
-# VLM 默认 / 模式默认 prompt
-VLM_DEFAULT_PROMPT = "描述这张截图的内容、布局和用户意图"
-MIX_DEFAULT_PROMPT = "结合下方OCR结果，回答：描述这张截图的内容、布局和用户意图"
+# VLM 系统级 prompt：稳定的角色与输出契约，与用户问题分区。
+# 输出面向没有视觉能力的 AI Agent，必须完整提取页面信息，宁可多列也不许遗漏。
+VLM_SYSTEM_PROMPT = (
+    "你是截图视觉识别助手，输出直接提供给没有视觉能力的 AI Agent 使用，"
+    "必须完整、准确，宁可多列也不许遗漏页面元素。\n"
+    "输出固定为一个 JSON 对象，必须包含以下 5 个字段，缺一不可：\n"
+    "1. summary：用简洁中文概括截图整体内容；\n"
+    "2. intent：推断页面用途或用户意图；\n"
+    "3. elements：页面上所有可交互或关键元素"
+    "（按钮、输入框、链接、菜单、图标、标签、卡片等），"
+    "每项含 role（元素类型）、text（原文，无文字则为空字符串）、"
+    "position（元素中心点坐标 [x, y]）；\n"
+    "4. annotations：页面上所有批注、注释、高亮或手绘标注"
+    "（如红色文字、箭头、圈选、气泡等），每项含 text（一字不差读出原文）"
+    "与 position（中心点坐标 [x, y]），没有则返回空数组；\n"
+    "5. layout：含 page_type（页面类型）与 sections（主要区域数组，"
+    "如顶部导航、侧边栏、话题列表）。\n"
+    "完整性要求：小字、低对比度文字、红色/高亮标注、图标旁的标签最容易丢失，"
+    "请按顶部、侧边栏、内容区、底部逐区扫描全图后再输出；"
+    "对无法确认的文字尽量读出，不要猜测编造。\n"
+    "输出约束：必须紧凑，elements 与 layout 内容不重复；"
+    "layout.sections 每项只写区域名称和代表性要点，不要整段复制元素列表；"
+    "优先保证 annotations 与 elements 的完整性，总输出控制在约 1500 token 内。\n"
+    "只输出这一个 JSON 对象，不要输出 JSON 以外的任何内容。"
+)
 
-# VLM 输出 JSON 解析失败后回退到 raw 文本
-VLM_JSON_INSTRUCTION = (
-    "请严格输出一个 JSON 对象，包含以下字段："
-    "summary（内容摘要，字符串）、intent（用户意图，字符串）、"
-    "elements（可交互元素数组，每项含 role 元素类型、text 文字、position 位置）。"
-    "不要输出 JSON 以外的任何内容。"
+# VLM 用户级默认 prompt：未传 -p 时使用，传了则与用户问题拼接后一起进入用户消息。
+VLM_DEFAULT_PROMPT = (
+    "描述这张截图的内容、布局和用户意图；"
+    "并特别注意页面上的批注、注释、高亮或手绘标注"
+    "（如红色文字、箭头、圈选、气泡等），若存在请一字不差读出原文，"
+    "在 annotations 字段中给出，没有则返回空数组。"
+)
+MIX_DEFAULT_PROMPT = (
+    "结合下方OCR结果，回答：描述这张截图的内容、布局和用户意图；"
+    "并特别注意页面上的批注、注释、高亮或手绘标注"
+    "（如红色文字、箭头、圈选、气泡等），若存在请一字不差读出原文，"
+    "在 annotations 字段中给出，没有则返回空数组。"
 )
 
 # YOLO 置信度阈值
@@ -1051,13 +1079,12 @@ def run_vlm(
             mix_ocr_context_tokens,
         )
 
-    full_prompt = prompt
-    if ocr_context:
-        full_prompt = f"{ocr_context}\n\n{prompt}\n\n{VLM_JSON_INSTRUCTION}"
-    else:
-        full_prompt = f"{prompt}\n\n{VLM_JSON_INSTRUCTION}"
+    full_prompt = f"{ocr_context}\n\n{prompt}" if ocr_context else prompt
     content.append({"type": "text", "text": full_prompt})
-    messages = [{"role": "user", "content": content}]
+    messages = [
+        {"role": "system", "content": VLM_SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
 
     try:
         from qwen_vl_utils import process_vision_info  # type: ignore[import-untyped]
@@ -1084,7 +1111,7 @@ def run_vlm(
         with torch.inference_mode():
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=1024,
+                max_new_tokens=2048,
                 do_sample=False,
                 temperature=None,
                 top_p=None,
@@ -1105,15 +1132,24 @@ def run_vlm(
     elements = parsed.get("elements")
     if not isinstance(elements, list):
         elements = []
+    annotations = parsed.get("annotations")
+    if not isinstance(annotations, list):
+        annotations = []
+    layout = parsed.get("layout")
+    if not isinstance(layout, dict):
+        layout = None
 
     result: dict[str, Any] = {
         "text": summary,
         "intent": intent,
         "summary": summary,
+        "annotations": annotations,
         "elements": elements,
         "engine": f"qwen2.5-vl-{(get_installed_vlm_option() or 'unknown').lower()}",
         "mode": "vlm",
     }
+    if layout:
+        result["layout"] = layout
     if raw:
         result["raw"] = raw
     if ocr_context_stats is not None:
@@ -1215,11 +1251,17 @@ def run_vlm_inference(
                 raise
             emit_error("MODEL_INITIALIZATION_FAILED", f"OCR 阶段失败：{exc}")
             sys.exit(1)
-        prompt = prompt or MIX_DEFAULT_PROMPT
+        prompt = (
+            f"{MIX_DEFAULT_PROMPT}\n\n用户补充问题：{prompt}"
+            if prompt else MIX_DEFAULT_PROMPT
+        )
         strip_internal_item_fields(output_items)
         release_ocr()
     else:
-        prompt = prompt or VLM_DEFAULT_PROMPT
+        prompt = (
+            f"{VLM_DEFAULT_PROMPT}\n\n用户补充问题：{prompt}"
+            if prompt else VLM_DEFAULT_PROMPT
+        )
         if web_mode:
             try:
                 ui_items = run_yolo_detection(image_path)
@@ -1324,7 +1366,10 @@ def main() -> None:
     parser.add_argument("--image", help="图片文件路径")
     parser.add_argument("--mode", choices=["ocr", "vlm", "mix"], default="ocr",
                         help="识别模式（默认 ocr）")
-    parser.add_argument("--prompt", help="VLM/mix 模式的自定义问题（默认有内置模板）")
+    parser.add_argument(
+        "--prompt",
+        help="VLM/mix 模式附加问题，会拼接到默认提示词之后",
+    )
     parser.add_argument("--ocr", choices=["ppocrv6"], default="ppocrv6", help="OCR 引擎（默认 ppocrv6）")
     parser.add_argument("--web", action="store_true", help="启用 YOLO UI 元素检测（网页/UI 场景）")
     parser.add_argument(
