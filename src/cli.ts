@@ -18,7 +18,13 @@ import {
   selectInteractiveMenu,
 } from "./ui.js";
 import { VisionStateStore } from "./ocr/feature-state.js";
-import { installVisionFeature, removeVisionFeature, checkPythonAvailable } from "./ocr/feature-installer.js";
+import {
+  installVisionFeature,
+  removeVisionFeature,
+  checkPythonAvailable,
+  detectPlatform,
+  describeGpu,
+} from "./ocr/feature-installer.js";
 import { runVisionInference } from "./ocr/python-bridge.js";
 import {
   PPOCR_MODEL_DISPLAY,
@@ -370,6 +376,7 @@ async function runInfoCommand(
   const configStatus = await configStore.status();
   const visionState = await stateStore.read();
   const pythonInfo = await checkPythonAvailable();
+  const platform = await detectPlatform();
 
   const lines: string[] = [
     "code-vcli 环境信息",
@@ -387,6 +394,7 @@ async function runInfoCommand(
     `Node.js：${process.versions.node}`,
     `主机：${os.hostname()}`,
     `CPU：${os.cpus()[0]?.model ?? "未知"}`,
+    `显卡：${describeGpu(platform)}`,
     `内存：${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB`,
     "",
     "Python 环境",

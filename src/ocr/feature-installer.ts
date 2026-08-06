@@ -68,53 +68,172 @@ export async function detectPlatform(): Promise<PlatformInfo> {
     : process.arch === "ia32" ? "ia32"
     : "unknown";
 
-  const gpuVendor = await detectGpuVendor(os, arch);
+  const gpu = await detectGpuInfo(os, arch);
 
-  return { os, arch, gpuVendor };
+  return { os, arch, ...gpu };
 }
 
-async function detectGpuVendor(os: string, arch: string): Promise<GpuVendor> {
-  // macOS ARM64 = Apple Silicon
+/**
+ * 检测 GPU 的具体型号与显存（GB）。无法读取型号/显存时只返回厂商。
+ */
+async function detectGpuInfo(os: string, arch: string): Promise<{
+  gpuVendor: GpuVendor;
+  gpuName?: string;
+  gpuVramGb?: number;
+}> {
   if (os === "macos" && arch === "arm64") {
-    return "apple";
+    return detectAppleGpu();
   }
 
-  // Windows/Linux: try nvidia-smi
+  const nvidia = await detectNvidiaGpu();
+  if (nvidia) return nvidia;
+
+  const amd = await detectAmdGpu(os);
+  if (amd) return amd;
+
+  return { gpuVendor: "none" };
+}
+
+/** 通过 nvidia-smi 检测 NVIDIA GPU 型号与显存（MB → GB）。 */
+async function detectNvidiaGpu(): Promise<{
+  gpuVendor: "nvidia";
+  gpuName?: string;
+  gpuVramGb?: number;
+} | null> {
   try {
-    await execFileAsync("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], {
-      timeout: 5000,
-      windowsHide: true,
-    });
-    return "nvidia";
+    const { stdout: out } = await execFileAsync(
+      "nvidia-smi",
+      ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+      { timeout: 5000, windowsHide: true },
+    );
+    const firstLine = out.trim().split(/\r?\n/)[0] ?? "";
+    const [name, memoryMb] = firstLine.split(",").map((part) => part.trim());
+    const mb = Number.parseFloat(memoryMb ?? "");
+    return {
+      gpuVendor: "nvidia",
+      ...(name ? { gpuName: name } : {}),
+      ...(Number.isFinite(mb) && mb > 0 ? { gpuVramGb: mb / 1024 } : {}),
+    };
   } catch {
-    // Not NVIDIA or nvidia-smi not available
+    return null;
   }
+}
 
-  // Windows: try wmic for AMD
+/** macOS ARM64：通过 system_profiler 读取 Apple GPU 型号与显存。 */
+async function detectAppleGpu(): Promise<{
+  gpuVendor: "apple";
+  gpuName?: string;
+  gpuVramGb?: number;
+}> {
+  try {
+    const { stdout: out } = await execFileAsync(
+      "system_profiler",
+      ["SPDisplaysDataType", "-json"],
+      { timeout: 5000 },
+    );
+    const parsed: unknown = JSON.parse(out);
+    const displays = (parsed as { SPDisplaysDataType?: unknown[] })?.SPDisplaysDataType;
+    const gpu = Array.isArray(displays) ? displays[0] as Record<string, unknown> | undefined : undefined;
+    const name = typeof gpu?.sppci_model === "string" ? gpu.sppci_model
+      : typeof gpu?._name === "string" ? gpu._name
+      : undefined;
+    const vramMatch = typeof gpu?.spdisplays_vram === "string"
+      ? gpu.spdisplays_vram.match(/(\d+(?:\.\d+)?)\s*GB/i)
+      : null;
+    const vramGb = vramMatch ? Number.parseFloat(vramMatch[1] ?? "") : Number.NaN;
+    return {
+      gpuVendor: "apple",
+      ...(name ? { gpuName: name } : {}),
+      ...(Number.isFinite(vramGb) && vramGb > 0 ? { gpuVramGb: vramGb } : {}),
+    };
+  } catch {
+    return { gpuVendor: "apple" };
+  }
+}
+
+/** AMD GPU：Windows 用 CIM，Linux 用 lspci + rocm-smi，尽力读取型号与显存。 */
+async function detectAmdGpu(os: string): Promise<{
+  gpuVendor: "amd";
+  gpuName?: string;
+  gpuVramGb?: number;
+} | null> {
   if (os === "windows") {
     try {
-      const { stdout: wmicOut } = await execFileAsync(
-        "wmic",
-        ["path", "win32_VideoController", "get", "name"],
+      const script = [
+        "$gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'AMD|Radeon' } | Select-Object -First 1",
+        "if ($gpu) {",
+        "  $vram = if ($gpu.AdapterRAM -gt 0) { [math]::Round($gpu.AdapterRAM / 1GB, 1) } else { '' }",
+        "  Write-Output (($gpu.Name) + '|' + $vram)",
+        "}",
+      ].join("; ");
+      const { stdout: out } = await execFileAsync(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
         { timeout: 5000, windowsHide: true },
       );
-      if (/AMD|Radeon/i.test(wmicOut)) return "amd";
+      const [name, vramText] = (out.trim().split(/\r?\n/)[0] ?? "").split("|");
+      const vramGb = Number.parseFloat(vramText ?? "");
+      if (name || (Number.isFinite(vramGb) && vramGb > 0)) {
+        return {
+          gpuVendor: "amd",
+          ...(name ? { gpuName: name } : {}),
+          ...(Number.isFinite(vramGb) && vramGb > 0 ? { gpuVramGb: vramGb } : {}),
+        };
+      }
     } catch {
-      // wmic not available
+      // PowerShell 不可用则跳过
     }
+    return null;
   }
 
-  // Linux: check /proc or lspci for AMD
   if (os === "linux") {
+    let name: string | undefined;
     try {
       const { stdout: lspciOut } = await execFileAsync("lspci", [], { timeout: 5000 });
-      if (/AMD|Radeon/i.test(lspciOut)) return "amd";
+      const line = lspciOut.split(/\r?\n/).find((entry) =>
+        /VGA compatible controller/i.test(entry) && /AMD|Radeon/i.test(entry));
+      name = line?.replace(/^.*controller:\s*/i, "").trim() || undefined;
     } catch {
-      // lspci not available
+      // lspci 不可用则跳过
     }
+    let vramGb: number | undefined;
+    try {
+      const { stdout: rocmOut } = await execFileAsync(
+        "rocm-smi",
+        ["--showmeminfo", "vram"],
+        { timeout: 5000 },
+      );
+      const match = rocmOut.match(/(\d+(?:\.\d+)?)\s*(M|G)B/i);
+      if (match) {
+        const value = Number.parseFloat(match[1] ?? "");
+        vramGb = match[2]?.toUpperCase() === "M" ? value / 1024 : value;
+      }
+    } catch {
+      // rocm-smi 不可用则跳过
+    }
+    if (name || vramGb !== undefined) {
+      return {
+        gpuVendor: "amd",
+        ...(name ? { gpuName: name } : {}),
+        ...(vramGb !== undefined && Number.isFinite(vramGb) && vramGb > 0 ? { gpuVramGb: vramGb } : {}),
+      };
+    }
+    return null;
   }
 
-  return "none";
+  return null;
+}
+
+/** 生成人类可读的 GPU 描述：型号（显存）→ 型号 → 厂商 → 未检测到 GPU。 */
+export function describeGpu(platform: PlatformInfo): string {
+  if (platform.gpuVendor === "none") return "未检测到 GPU";
+  const { gpuName, gpuVramGb } = platform;
+  if (gpuName && gpuVramGb !== undefined) {
+    return `${gpuName}（${gpuVramGb >= 10 ? gpuVramGb.toFixed(0) : gpuVramGb.toFixed(1)} GB 显存）`;
+  }
+  if (gpuName) return gpuName;
+  if (gpuVramGb !== undefined) return `${platform.gpuVendor} GPU（约 ${gpuVramGb.toFixed(0)} GB 显存）`;
+  return `检测到 ${platform.gpuVendor} GPU`;
 }
 
 /**
@@ -264,7 +383,7 @@ export async function installVisionFeature(
 
   // 2. 检测平台和 GPU
   const platform = await detectPlatform();
-  stdout.write(`检测到系统：${platform.os} ${platform.arch}，GPU：${platform.gpuVendor}\n`);
+  stdout.write(`检测到系统：${platform.os} ${platform.arch}，GPU：${describeGpu(platform)}\n`);
 
   // 3. 选择计算模式（CPU/GPU）
   let computeMode: ComputeMode;
@@ -320,7 +439,7 @@ export async function installVisionFeature(
     if (existingReady && existing.capabilities === capabilities && existing.vlmQuantization) {
       vlmQuantization = existing.vlmQuantization;
     } else {
-      const quant = await selectVlmQuantization(options.prompt);
+      const quant = await selectVlmQuantization(platform, options.prompt);
       vlmQuantization = quant.id;
     }
   }
@@ -535,9 +654,7 @@ async function promptComputeMode(
   prompt: (message: string) => Promise<string>,
   platform: PlatformInfo,
 ): Promise<ComputeMode> {
-  const gpuDesc = platform.gpuVendor === "none"
-    ? "未检测到 GPU"
-    : `检测到 ${platform.gpuVendor} GPU`;
+  const gpuDesc = describeGpu(platform);
 
   const message = [
     "选择计算模式：",
@@ -610,13 +727,14 @@ async function promptOcrBackend(
 // VLM 量化选择（显存检测 + 推荐 + 强制确认，--yes 也不跳过）
 // ---------------------------------------------------------------------------
 async function selectVlmQuantization(
+  platform: PlatformInfo,
   prompt: (message: string) => Promise<string>,
 ): Promise<VlmQuantOption> {
-  const vramGb = await detectGpuVramGb();
+  const vramGb = platform.gpuVramGb ?? (await detectGpuVramGb());
   if (vramGb === null) {
     throw new VcliError(
       "MODEL_INITIALIZATION_FAILED",
-      `检测显卡显存失败。${VLM_MODEL_DISPLAY} 需要 8GB+ 显存，请确认 GPU 正常或改用 CPU/OCR 模式。`,
+      `检测显卡显存失败（${platform.gpuName ?? "未知显卡"}）。${VLM_MODEL_DISPLAY} 需要 8GB+ 显存，请确认 GPU 正常或改用 CPU/OCR 模式。`,
       6,
     );
   }

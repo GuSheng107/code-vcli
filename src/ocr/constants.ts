@@ -114,6 +114,8 @@ export interface PlatformInfo {
   os: "windows" | "macos" | "linux" | "unknown";
   arch: "x64" | "arm64" | "ia32" | "unknown";
   gpuVendor: GpuVendor;
+  gpuName?: string;
+  gpuVramGb?: number;
 }
 
 export interface ComputeOption {
