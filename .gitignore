@@ -13,3 +13,4 @@ npm_recovery_codes.txt
 __pycache__/
 *.pyc
 /test/
+.trae/

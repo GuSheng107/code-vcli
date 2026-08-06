@@ -7,6 +7,7 @@ import {
   VISION_STATE_FILE_NAME,
 } from "./constants.js";
 import type { VisionFeatureState, VisionFeatureStatus } from "./types.js";
+import type { ComputeCapability, OcrBackend } from "./constants.js";
 
 function isVisionFeatureState(value: unknown): value is VisionFeatureState {
   if (typeof value !== "object" || value === null) return false;
@@ -48,7 +49,15 @@ export class VisionStateStore {
     return state?.status ?? "none";
   }
 
-  async writeReady(pythonVersion: string): Promise<void> {
+  async writeReady(
+    pythonVersion: string,
+    config: {
+      computeMode: "cpu" | "gpu";
+      capabilities: ComputeCapability;
+      ocrBackend?: OcrBackend;
+      vlmQuantization?: string;
+    },
+  ): Promise<void> {
     const state: VisionFeatureState = {
       status: "ready",
       feature_version: VISION_FEATURE_VERSION,
@@ -57,6 +66,10 @@ export class VisionStateStore {
       arch: process.arch,
       installed_at: new Date().toISOString(),
       verified: true,
+      computeMode: config.computeMode,
+      capabilities: config.capabilities,
+      ...(config.ocrBackend ? { ocrBackend: config.ocrBackend } : {}),
+      ...(config.vlmQuantization ? { vlmQuantization: config.vlmQuantization } : {}),
     };
     await this.writeAtomic(state);
   }
@@ -71,6 +84,8 @@ export class VisionStateStore {
       arch: process.arch,
       installed_at: new Date().toISOString(),
       verified: false,
+      computeMode: "cpu",
+      capabilities: "ocr",
     };
     await this.writeAtomic({ ...state, status, python_version: pythonVersion || state.python_version });
   }

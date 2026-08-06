@@ -85,12 +85,13 @@
 └──────────────────────────────┘</span>
 <span class="pt-muted">为 AI 模型提供 Web 开发视觉能力</span>
 
-<span class="pt-accent">❯</span> 1. 识别图片        <span class="pt-muted">PP-OCRv6 / + YOLO Web 模式</span>
+<span class="pt-accent">❯</span> 1. 识别图片        <span class="pt-muted">对图片执行视觉识别（PP-OCRv6 / + YOLO）</span>
   2. 重新初始化        <span class="pt-muted">重装视觉模型环境</span>
-  3. 查看环境          <span class="pt-muted">显示 code-vcli 与系统环境信息</span>
-  4. 检查版本更新      <span class="pt-muted">比较 npm Registry 最新版本</span>
-  5. 查看帮助          <span class="pt-muted">显示所有命令与参数</span>
-  6. 退出              <span class="pt-muted">结束 code-vcli</span></div>
+  3. 重置环境          <span class="pt-muted">删除模型/虚拟环境并重置为未初始化</span>
+  4. 查看环境          <span class="pt-muted">显示 code-vcli 与系统环境信息</span>
+  5. 检查版本更新      <span class="pt-muted">比较 npm Registry 最新版本</span>
+  6. 查看帮助          <span class="pt-muted">显示所有命令与参数</span>
+  7. 退出              <span class="pt-muted">结束 code-vcli</span></div>
               <figcaption>已初始化</figcaption>
             </figure>
           </div>
@@ -109,7 +110,7 @@
           <div class="doc-index">03</div>
           <span class="kicker">COMMAND</span>
           <h2><code>vcli init</code></h2>
-          <p class="doc-lead">初始化视觉模型环境：创建 venv、选计算模式、下载模型权重（约 1-2 GB）。首次使用前必须运行。</p>
+          <p class="doc-lead">初始化视觉模型环境：创建 venv、选择计算模式与能力、下载模型权重。首次使用前必须运行。</p>
           <div class="cmd-block command-syntax"><code id="code-init">vcli init [--yes] [--workspace &lt;path&gt;] [--reset-workspace]</code><button type="button" class="copy-btn" data-copy="code-init" aria-label="复制 init 命令">复制</button></div>
           <h3 class="sub-h">专属参数</h3>
           <div class="opt-table">
@@ -118,12 +119,19 @@
             <div class="opt-row"><code>--workspace &lt;path&gt;</code><span>指定工作区路径（存放 venv + 模型）</span><span class="dim">~/.code-vcli/</span></div>
             <div class="opt-row"><code>--reset-workspace</code><span>重新选择工作区路径</span><span class="dim">—</span></div>
           </div>
+          <h3 class="sub-h">能力选择</h3>
+          <div class="mode-summary">
+            <div><strong>计算模式</strong><span>CPU（仅 OCR）或 GPU（可装 OCR 和/或 VLM），自动检测硬件</span></div>
+            <div><strong>能力组合</strong><span>GPU 模式下可选「仅 OCR / 仅 VLM / 都要」；「都要」是 <code>--mix</code> 的前置条件</span></div>
+            <div><strong>OCR 放置</strong><span>GPU + 含 OCR 时，OCR 跑 CPU 还是 GPU；推荐 CPU 省显存给 VLM</span></div>
+            <div><strong>VLM 量化</strong><span>含 VLM 时按显存自动推荐 BF16（16GB+）或 AWQ INT4（8-15GB），需确认</span></div>
+          </div>
           <h3 class="sub-h">示例</h3>
           <div class="cmd-block"><code id="example-init">vcli init</code><button type="button" class="copy-btn" data-copy="example-init" aria-label="复制 init 示例">复制</button></div>
           <p class="doc-note">跳过交互：<code>vcli init --yes</code></p>
           <p class="doc-note">自定义工作区：<code>vcli init --yes --workspace "E:\code-vcli-data"</code></p>
           <p class="doc-note">需要 Python 3.10+。模型缓存位置：<code>~/.code-vcli/models/</code>。</p>
-          <p class="doc-note">升级 code-vcli 后再次运行 <code>vcli init</code> 会自动同步最新推理脚本到工作区，无需重新下载模型。</p>
+          <p class="doc-note">已安装环境再次运行 <code>vcli init</code> 会先询问是否卸载现有能力：输入 <code>n</code>（默认）保留现有安装，仅增量增补/调整能力（例如为「仅 OCR」增加 VLM）；输入 <code>y</code> 则卸载后全新安装。升级后再次运行会自动同步最新推理脚本，无需重新下载模型。</p>
         </article>
 
         <article class="doc-section command-doc" id="cmd-run">
@@ -137,7 +145,10 @@
             <div class="opt-row opt-head"><span>参数</span><span>作用</span><span>默认值</span></div>
             <div class="opt-row"><code>&lt;image&gt;</code><span>图片文件路径（必填）。支持 png/jpg/jpeg/webp/bmp/tiff/tif，上限 20 MB</span><span class="dim">—</span></div>
             <div class="opt-row"><code>--ocr &lt;ppocrv6&gt;</code><span>OCR 引擎</span><span class="dim">ppocrv6</span></div>
-            <div class="opt-row"><code>-w, --web</code><span>启用 YOLO UI 元素检测（网页/UI 场景）</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>--vlm</code><span>使用 VLM 视觉理解（Qwen2.5-VL，需已装 VLM 能力）</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>--mix</code><span>OCR + VLM 顺序执行，先 OCR 再把文字注入 VLM（需已装 both）</span><span class="dim">关闭</span></div>
+            <div class="opt-row"><code>-p, --prompt &lt;text&gt;</code><span>VLM/--mix 模式自定义问题（默认有内置模板）</span><span class="dim">—</span></div>
+            <div class="opt-row"><code>-w, --web</code><span>启用 YOLO UI 元素检测（网页/UI 场景，OCR 模式）</span><span class="dim">关闭</span></div>
             <div class="opt-row"><code>--json</code><span>输出适合 AI 读取的 JSON（自动保存到工作区 files/ 目录并返回文件路径）</span><span class="dim">关闭</span></div>
             <div class="opt-row"><code>--timeout &lt;seconds&gt;</code><span>本次推理超时（秒），必须为正数</span><span class="dim">—</span></div>
             <div class="opt-row"><code>--min-confidence &lt;0~1&gt;</code><span>空 UI 元素保留阈值（仅 <code>--web</code>）。空文本且置信度低于该值的误检自动丢弃</span><span class="dim">0.55</span></div>
@@ -148,12 +159,17 @@
           <p class="doc-note">JSON 输出：<code>vcli run ./screenshot.png --json</code></p>
           <p class="doc-note">Web 模式：<code>vcli run ./webpage.png --web</code></p>
           <p class="doc-note">Web 模式 + JSON：<code>vcli run ./webpage.png --web --json</code></p>
-          <h3 class="sub-h">模式说明</h3>
+          <p class="doc-note">VLM 模式：<code>vcli run ./image.png --vlm --json</code></p>
+          <p class="doc-note">Mix 模式：<code>vcli run ./image.png --mix --json</code></p>
+          <p class="doc-note">自定义问题：<code>vcli run ./image.png --vlm -p "这张页面主要的操作是什么？"</code></p>
+          <h3 class="sub-h">识别模式</h3>
           <div class="mode-summary">
-            <div><strong>普通模式</strong><span>整图 OCR，速度快、带坐标。PP-OCRv6（RapidOCR + OpenVINO），支持中英日等 50 种语言</span></div>
-            <div><strong>Web 模式 <code>-w</code></strong><span>叠加 OmniParser V2 YOLO 检测 UI 元素位置，通过 IoU、中心点距离、面积比把文字归到对应元素上，按位置排序输出。空文本且置信度低于 <code>--min-confidence</code>（默认 0.55）的误检自动丢弃</span></div>
+            <div><strong>OCR 模式 <code>--ocr</code>（默认）</strong><span>整图 OCR，速度快、带坐标。PP-OCRv6（RapidOCR + OpenVINO），支持中英日等 50 种语言</span></div>
+            <div><strong>Web 模式 <code>-w</code></strong><span>OCR 模式下叠加 OmniParser V2 YOLO 检测 UI 元素位置，通过 IoU、中心点距离、面积比把文字归到对应元素上，按位置排序输出。空文本且置信度低于 <code>--min-confidence</code>（默认 0.55）的误检自动丢弃</span></div>
+            <div><strong>VLM 模式 <code>--vlm</code></strong><span>Qwen2.5-VL 视觉理解与意图识别，返回结构化 JSON（intent / summary / elements）。适合「看懂画面含义、回答关于图片的问题」</span></div>
+            <div><strong>Mix 模式 <code>--mix</code></strong><span>先 OCR 提取文字，再把文字注入 VLM，先定位再理解。适合既有文字又有布局理解的场景</span></div>
           </div>
-          <p class="doc-note">Web 模式仅在网页/UI 截图场景使用，普通文档截图无需启用 <code>--web</code>。</p>
+          <p class="doc-note">VLM / Mix 模式需要 GPU 模式且已安装 VLM 能力（<code>--mix</code> 还需 OCR），未安装时在 <code>init</code> 中选择对应能力。Web 模式仅在网页/UI 截图场景使用，普通文档截图无需启用 <code>--web</code>。</p>
         </article>
 
         <article class="doc-section command-doc" id="cmd-info">
@@ -162,7 +178,7 @@
           <h2><code>vcli info</code></h2>
           <p class="doc-lead">显示 code-vcli 版本、配置目录、工作区、系统环境、Python 和视觉模型状态。</p>
           <div class="cmd-block command-syntax"><code id="code-info">vcli info</code><button type="button" class="copy-btn" data-copy="code-info" aria-label="复制 info 命令">复制</button></div>
-          <div class="no-options"><strong>参数</strong><span>无。输出包含版本、配置目录、工作区、初始化状态、操作系统、Node.js、Python、视觉模型状态和 OCR 引擎信息。</span></div>
+          <div class="no-options"><strong>参数</strong><span>无。输出包含版本、配置目录、工作区、初始化状态、操作系统、Node.js、Python、视觉模型状态、已装能力（计算模式 / 能力组合 / OCR 放置 / VLM 量化）和 OCR/VLM/Web 引擎信息。</span></div>
           <h3 class="sub-h">输出内容</h3>
           <div class="mode-summary">
             <div><strong>版本</strong><span>当前 code-vcli 版本号</span></div>
@@ -171,6 +187,7 @@
             <div><strong>系统环境</strong><span>操作系统、Node.js、主机、CPU、内存</span></div>
             <div><strong>Python 环境</strong><span>检测到的 Python 版本与路径</span></div>
             <div><strong>视觉模型</strong><span>状态、已验证、安装时间、模型与 venv 目录</span></div>
+            <div><strong>已装能力</strong><span>计算模式（CPU/GPU）、能力组合（仅 OCR / 仅 VLM / 都要）、OCR 放置、VLM 量化</span></div>
           </div>
         </article>
 
@@ -259,6 +276,10 @@
             <div class="opt-row"><code>text</code><span>string</span><span>全文识别结果，各项用 \n 连接</span></div>
             <div class="opt-row"><code>items</code><span>array</span><span>识别项数组</span></div>
             <div class="opt-row"><code>layout</code><span>object</span><span>仅 Web 模式：页面级布局分析（聚类、页面模式、文字密度）</span></div>
+            <div class="opt-row"><code>intent</code><span>string</span><span>仅 VLM/Mix：VLM 推断的页面/图片意图（如 login / dashboard）</span></div>
+            <div class="opt-row"><code>summary</code><span>string</span><span>仅 VLM/Mix：VLM 对画面内容的自然语言总结</span></div>
+            <div class="opt-row"><code>elements</code><span>array</span><span>仅 VLM/Mix：VLM 识别出的关键 UI 元素/操作点</span></div>
+            <div class="opt-row"><code>engine</code><span>string</span><span>仅 VLM/Mix：使用的引擎（ocr / vlm / mix）</span></div>
           </div>
           <h3 class="sub-h">items[] 字段</h3>
           <div class="opt-table">

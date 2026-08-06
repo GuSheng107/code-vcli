@@ -15,7 +15,8 @@ export type ErrorCode =
   | "MODEL_RUNTIME_MISSING"
   | "MODEL_INITIALIZATION_FAILED"
   | "MODEL_RECOGNITION_FAILED"
-  | "MODEL_TEXT_EMPTY";
+  | "MODEL_TEXT_EMPTY"
+  | "MODEL_CAPABILITY_MISSING";
 
 export class VcliError extends Error {
   readonly code: ErrorCode;

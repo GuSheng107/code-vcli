@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""vcli 视觉推理脚本 — PP-OCRv6 + OmniParser YOLO
+"""vcli 视觉推理脚本 — PP-OCRv6 + OmniParser YOLO + Qwen2.5-VL
 
 设计：
 - 默认模式：PP-OCRv6 整图识别，速度快、带坐标
+- --mode vlm：Qwen2.5-VL 直接看图，支持自定义 --prompt，输出结构化 JSON
+- --mode mix：先 OCR，释放 OCR 资源后，再加载 VLM 并注入 OCR 结果
 - --web 模式：额外跑 YOLO 检测 UI 元素位置，与 OCR 文字合并输出
   适用于网页/UI 截图场景，普通文档无需启用
 
 命令：
-  --init                          下载全部模型
-  --self-test                     验证模型可加载
-  --image <path>                  对图片执行推理
-  --ocr <ppocrv6>                 OCR 引擎（当前仅支持 ppocrv6）
-  --web                           启用 YOLO UI 元素检测（网页/UI 场景）
+  --init --compute <ocr|vlm|both>        按范围下载模型
+  --self-test --compute <ocr|vlm|both>   验证对应模型可加载
+  --image <path>                         对图片执行推理
+  --mode <ocr|vlm|mix>                   识别模式（默认 ocr）
+  --prompt <text>                        VLM/mix 模式自定义问题
+  --ocr <ppocrv6>                        OCR 引擎（当前仅支持 ppocrv6）
+  --web                                  启用 YOLO UI 元素检测（网页/UI 场景）
 """
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import re
@@ -58,6 +63,24 @@ PPOCR_DIR = MODELS_DIR / "ppocr"
 
 PPOCR_MODEL_DISPLAY = "PP-OCRv6 (RapidOCR + OpenVINO)"
 YOLO_MODEL_DISPLAY = "OmniParser V2 YOLO"
+VLM_MODEL_DISPLAY = "Qwen2.5-VL 7B (transformers)"
+
+# VLM 模型仓库
+VLM_REPO = "Qwen/Qwen2.5-VL-7B-Instruct"
+VLM_AWQ_REPO = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+VLM_DIR = MODELS_DIR / "vlm"
+
+# VLM 默认 / 模式默认 prompt
+VLM_DEFAULT_PROMPT = "描述这张截图的内容、布局和用户意图"
+MIX_DEFAULT_PROMPT = "结合下方OCR结果，回答：描述这张截图的内容、布局和用户意图"
+
+# VLM 输出 JSON 解析失败后回退到 raw 文本
+VLM_JSON_INSTRUCTION = (
+    "请严格输出一个 JSON 对象，包含以下字段："
+    "summary（内容摘要，字符串）、intent（用户意图，字符串）、"
+    "elements（可交互元素数组，每项含 role 元素类型、text 文字、position 位置）。"
+    "不要输出 JSON 以外的任何内容。"
+)
 
 # YOLO 置信度阈值
 BOX_THRESHOLD = 0.25
@@ -130,19 +153,34 @@ def init_ppocr_models() -> None:
         log(f"PP-OCRv6 预下载失败（将在使用时重试）：{exc}")
 
 
-def download_all_models() -> None:
+def download_all_models(compute: str = "both", quant: str = "bf16") -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    log("== 开始下载 OmniParser YOLO ==")
-    download_snapshot(OMNIPARSER_REPO, OMNIPARSER_DIR, allow_patterns=["icon_detect/model.pt"])
-    log("== 开始下载 PP-OCRv6 ==")
-    init_ppocr_models()
-    missing = verify_model_integrity()
+    want_ocr = compute in ("ocr", "both")
+    want_vlm = compute in ("vlm", "both")
+
+    if want_ocr:
+        log("== 开始下载 OmniParser YOLO ==")
+        download_snapshot(OMNIPARSER_REPO, OMNIPARSER_DIR, allow_patterns=["icon_detect/model.pt"])
+        log("== 开始下载 PP-OCRv6 ==")
+        init_ppocr_models()
+    if want_vlm:
+        log(f"== 开始下载 {VLM_MODEL_DISPLAY}（{quant}） ==")
+        download_vlm(quant)
+
+    missing = verify_model_integrity(compute)
     if missing:
         log("警告：下载完成后部分文件仍缺失：")
         for item in missing:
             log(f"  - {item}")
         raise RuntimeError(f"模型下载不完整，缺失 {len(missing)} 项")
     log("== 全部模型下载完成 ==")
+
+
+def download_vlm(quant: str = "bf16") -> None:
+    """下载对应量化版本的 VLM 权重。awq 取 AWQ 量化仓库，否则下载 BF16 全量权重。"""
+    VLM_DIR.mkdir(parents=True, exist_ok=True)
+    repo = VLM_AWQ_REPO if quant == "awq" else VLM_REPO
+    download_snapshot(repo, VLM_DIR)
 
 
 def _check_file(path: Path) -> bool:
@@ -161,17 +199,23 @@ def _check_dir_has_files(path: Path, min_count: int = 1) -> bool:
         return False
 
 
-def verify_model_integrity() -> list[str]:
+def verify_model_integrity(compute: str = "both") -> list[str]:
     missing: list[str] = []
-    if not _check_file(ICON_DETECT_DIR / "model.pt"):
-        missing.append("omniparser/icon_detect/model.pt")
-    if not _check_dir_has_files(PPOCR_DIR, 1):
-        missing.append("ppocr/ (RapidOCR 模型未下载)")
+    want_ocr = compute in ("ocr", "both")
+    want_vlm = compute in ("vlm", "both")
+    if want_ocr:
+        if not _check_file(ICON_DETECT_DIR / "model.pt"):
+            missing.append("omniparser/icon_detect/model.pt")
+        if not _check_dir_has_files(PPOCR_DIR, 1):
+            missing.append("ppocr/ (RapidOCR 模型未下载)")
+    if want_vlm:
+        if not _check_dir_has_files(VLM_DIR, 1):
+            missing.append("vlm/ (VLM 模型未下载)")
     return missing
 
 
-def ensure_models_ready() -> None:
-    missing = verify_model_integrity()
+def ensure_models_ready(compute: str = "both") -> None:
+    missing = verify_model_integrity(compute)
     if missing:
         log("模型文件不完整，缺失：")
         for item in missing:
@@ -703,7 +747,199 @@ def merge_web_results(
     return text, all_items, model_name, layout
 
 
-def run_inference(image_path: str, ocr_engine: str, web_mode: bool, min_ui_confidence: float) -> None:
+# ---------------------------------------------------------------------------
+# VLM 引擎（Qwen2.5-VL，transformers）
+# ---------------------------------------------------------------------------
+_vlm_model: Any = None
+_vlm_processor: Any = None
+
+
+def load_vlm() -> tuple[Any, Any]:
+    """加载 Qwen2.5-VL 模型与处理器。
+
+    优先使用本地 VLM_DIR 权重；自动检测 CUDA/MPS 设备。
+    """
+    global _vlm_model, _vlm_processor
+    if _vlm_model is not None and _vlm_processor is not None:
+        return _vlm_model, _vlm_processor
+
+    try:
+        import torch  # type: ignore[import-untyped]
+        from transformers import (  # type: ignore[import-untyped]
+            AutoProcessor,
+            Qwen2_5_VLForConditionalGeneration,
+        )
+    except ImportError as exc:
+        emit_error("MODEL_RUNTIME_MISSING", f"transformers 未安装或无法导入：{exc}")
+        sys.exit(1)
+
+    device = get_device()
+    if device.startswith("cuda"):
+        torch_dtype = torch.bfloat16
+    else:
+        torch_dtype = torch.float32
+
+    kw: dict[str, Any] = {
+        "torch_dtype": torch_dtype,
+        "device_map": "auto",
+    }
+    # AWQ 权重：本地目录含量化权重时由 transformers 自动识别
+    log(f"加载 {VLM_MODEL_DISPLAY}（device={device}）…")
+    try:
+        _vlm_processor = AutoProcessor.from_pretrained(str(VLM_DIR))
+        _vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(str(VLM_DIR), **kw)
+    except Exception as exc:
+        emit_error("MODEL_INITIALIZATION_FAILED", f"VLM 初始化失败：{exc}")
+        sys.exit(1)
+    return _vlm_model, _vlm_processor
+
+
+def release_vlm() -> None:
+    """释放 VLM 模型的 GPU/CPU 资源，供 mix 模式顺序执行时释放显存。"""
+    global _vlm_model, _vlm_processor
+    if _vlm_model is not None:
+        try:
+            import torch
+            _vlm_model.to("cpu")
+            del _vlm_model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    _vlm_model = None
+    _vlm_processor = None
+
+
+def _parse_vlm_json(text: str) -> dict[str, Any]:
+    """从 VLM 回答中解析结构化 JSON；失败回退到 raw 文本。"""
+    text = text.strip()
+    # 去掉可能的 markdown 代码块围栏
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n|```$", "", text).strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    # 尝试截取第一个 { 到最后一个 } 之间的 JSON
+    try:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end + 1])
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {"raw": text}
+
+
+def run_vlm(
+    image_path: str,
+    prompt: str,
+    ocr_context: str | None = None,
+    web_mode: bool = False,
+) -> dict[str, Any]:
+    """运行 VLM 推理，返回结构化 JSON。
+
+    - web_mode 时额外叠加 YOLO UI 坐标参考。
+    - ocr_context 非空时（mix 模式）注入 OCR 文字结果。
+    """
+    from transformers import TextInput  # noqa: F401  (生成参数类型)
+
+    model, processor = load_vlm()
+
+    # 组装消息
+    content: list[dict[str, Any]] = [{"type": "image", "image": image_path}]
+    if web_mode:
+        ui_items = run_yolo_detection(image_path)
+        if ui_items:
+            coords = [
+                {"bbox": it["bbox"], "confidence": round(it.get("confidence", 0), 3)}
+                for it in ui_items
+            ]
+            content.append({
+                "type": "text",
+                "text": f"以下是 YOLO 检测到的 UI 元素坐标（参考用）：{json.dumps(coords, ensure_ascii=False)}",
+            })
+
+    full_prompt = prompt
+    if ocr_context:
+        full_prompt = (
+            f"{ocr_context}\n\n{prompt}\n\n{VLM_JSON_INSTRUCTION}"
+        )
+    elif web_mode:
+        full_prompt = f"{prompt}\n\n{VLM_JSON_INSTRUCTION}"
+    else:
+        full_prompt = f"{prompt}\n\n{VLM_JSON_INSTRUCTION}"
+
+    content.append({"type": "text", "text": full_prompt})
+    messages = [{"role": "user", "content": content}]
+
+    try:
+        text_input = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = processor(text=[text_input], images=[image_path], return_tensors="pt")
+    except Exception as exc:
+        emit_error("MODEL_RECOGNITION_FAILED", f"VLM 输入处理失败：{exc}")
+        sys.exit(1)
+
+    device = get_device()
+    inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+
+    try:
+        import torch
+        with torch.inference_mode():
+            generated_ids = model.generate(
+                **inputs,
+                max_new_tokens=1024,
+                do_sample=False,
+                temperature=None,
+                top_p=None,
+            )
+        generated_ids = generated_ids[:, inputs["input_ids"].shape[1]:]
+        response = processor.batch_decode(
+            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0]
+    except Exception as exc:
+        emit_error("MODEL_RECOGNITION_FAILED", f"VLM 推理失败：{exc}")
+        sys.exit(1)
+
+    parsed = _parse_vlm_json(response)
+    raw = parsed.get("raw") or response
+    summary = parsed.get("summary") or raw
+    intent = parsed.get("intent") or ""
+    elements = parsed.get("elements")
+    if not isinstance(elements, list):
+        elements = []
+
+    return {
+        "text": summary,
+        "raw": raw,
+        "intent": intent,
+        "summary": summary,
+        "elements": elements,
+        "engine": "qwen2.5-vl-7b",
+        "mode": "vlm",
+    }
+
+
+def run_inference(
+    image_path: str,
+    ocr_engine: str,
+    web_mode: bool,
+    min_ui_confidence: float,
+    mode: str = "ocr",
+    prompt: str | None = None,
+) -> None:
+    if mode in ("vlm", "mix"):
+        run_vlm_inference(image_path, web_mode, prompt, mode)
+        return
+
+    # ---- OCR 模式（现有逻辑）----
     try:
         text, ocr_items = run_ppocr(image_path)
     except ImportError as exc:
@@ -731,43 +967,103 @@ def run_inference(image_path: str, ocr_engine: str, web_mode: bool, min_ui_confi
     payload: dict[str, Any] = {
         "text": text,
         "items": items,
+        "mode": "ocr",
     }
     if layout:
         payload["layout"] = layout
     emit(payload)
 
 
+def run_vlm_inference(image_path: str, web_mode: bool, prompt: str | None, mode: str) -> None:
+    """VLM / mix 模式入口。
+
+    - vlm：纯 VLM，直接看原图（可选 YOLO 坐标）。
+    - mix：顺序执行 —— 先 OCR，释放 OCR 资源后，再加载 VLM 并注入 OCR 结果。
+    """
+    ocr_context: str | None = None
+    if mode == "mix":
+        try:
+            text, ocr_items = run_ppocr(image_path)
+        except Exception as exc:
+            emit_error("MODEL_INITIALIZATION_FAILED", f"OCR 阶段失败：{exc}")
+            sys.exit(1)
+        # 释放 OCR 资源，避免与 VLM 争用
+        release_ocr()
+        if ocr_items:
+            lines = [
+                f"{it.get('text', '')} {('bbox=' + str(it['bbox'])) if 'bbox' in it else ''}".rstrip()
+                for it in ocr_items
+                if it.get("text")
+            ]
+            ocr_context = "OCR 识别结果（文字与坐标，可能不完整）：\n" + "\n".join(lines)
+        prompt = prompt or MIX_DEFAULT_PROMPT
+    else:
+        prompt = prompt or VLM_DEFAULT_PROMPT
+
+    result = run_vlm(image_path, prompt, ocr_context, web_mode)
+    emit(result)
+
+
+def release_ocr() -> None:
+    """释放 OCR 引擎（RapidOCR/YOLO）占用的资源。"""
+    global _ppocr_engine, _yolo_model
+    _ppocr_engine = None
+    _yolo_model = None
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # 自检 / 主入口
 # ---------------------------------------------------------------------------
-def self_test() -> bool:
+def self_test(compute: str = "both") -> bool:
     import traceback
-    missing = verify_model_integrity()
+    missing = verify_model_integrity(compute)
     if missing:
         log("模型文件不完整，缺失：")
         for item in missing:
             log(f"  - {item}")
         return False
-    try:
-        load_ppocr()
-    except Exception as exc:
-        log(f"PP-OCRv6 自检失败：{exc}")
-        log(traceback.format_exc())
-        return False
-    try:
-        load_yolo()
-    except Exception as exc:
-        log(f"YOLO 自检失败：{exc}")
-        log(traceback.format_exc())
-        return False
+    want_ocr = compute in ("ocr", "both")
+    want_vlm = compute in ("vlm", "both")
+    if want_ocr:
+        try:
+            load_ppocr()
+        except Exception as exc:
+            log(f"PP-OCRv6 自检失败：{exc}")
+            log(traceback.format_exc())
+            return False
+        try:
+            load_yolo()
+        except Exception as exc:
+            log(f"YOLO 自检失败：{exc}")
+            log(traceback.format_exc())
+            return False
+    if want_vlm:
+        try:
+            load_vlm()
+        except Exception as exc:
+            log(f"VLM 自检失败：{exc}")
+            log(traceback.format_exc())
+            return False
     return True
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="vcli 视觉推理（PP-OCRv6 + YOLO）")
+    parser = argparse.ArgumentParser(description="vcli 视觉推理（PP-OCRv6 + YOLO + Qwen2.5-VL）")
     parser.add_argument("--init", action="store_true", help="下载全部模型")
+    parser.add_argument("--compute", choices=["ocr", "vlm", "both"], default="both",
+                        help="init/self-test 涉及的模型范围（默认 both）")
+    parser.add_argument("--quant", choices=["bf16", "awq"], default="bf16",
+                        help="VLM 量化版本（默认 bf16）")
     parser.add_argument("--self-test", action="store_true", help="验证模型可加载")
     parser.add_argument("--image", help="图片文件路径")
+    parser.add_argument("--mode", choices=["ocr", "vlm", "mix"], default="ocr",
+                        help="识别模式（默认 ocr）")
+    parser.add_argument("--prompt", help="VLM/mix 模式的自定义问题（默认有内置模板）")
     parser.add_argument("--ocr", choices=["ppocrv6"], default="ppocrv6", help="OCR 引擎（默认 ppocrv6）")
     parser.add_argument("--web", action="store_true", help="启用 YOLO UI 元素检测（网页/UI 场景）")
     parser.add_argument(
@@ -780,7 +1076,7 @@ def main() -> None:
 
     if args.init:
         try:
-            download_all_models()
+            download_all_models(args.compute, args.quant)
         except Exception as exc:
             emit_error("MODEL_INITIALIZATION_FAILED", f"模型下载失败：{exc}")
             sys.exit(1)
@@ -788,7 +1084,7 @@ def main() -> None:
         sys.exit(0)
 
     if args.self_test:
-        ok = self_test()
+        ok = self_test(args.compute)
         emit({"ok": ok})
         sys.exit(0 if ok else 1)
 
@@ -800,8 +1096,14 @@ def main() -> None:
         emit_error("IMAGE_READ_ERROR", f"图片不存在：{args.image}")
         sys.exit(1)
 
-    ensure_models_ready()
-    run_inference(args.image, args.ocr, args.web, args.min_confidence)
+    # 按模式决定需要校验的模型范围
+    compute = "both"
+    if args.mode == "ocr":
+        compute = "ocr"
+    elif args.mode == "vlm":
+        compute = "vlm"
+    ensure_models_ready(compute)
+    run_inference(args.image, args.ocr, args.web, args.min_confidence, args.mode, args.prompt)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ export type InteractiveAction =
   | "info"
   | "update"
   | "help"
+  | "reset"
   | "exit";
 
 const UNINITIALIZED_MENU_ITEMS: Array<InteractiveMenuItem<InteractiveAction>> = [
@@ -27,6 +28,7 @@ const UNINITIALIZED_MENU_ITEMS: Array<InteractiveMenuItem<InteractiveAction>> = 
 const INITIALIZED_MENU_ITEMS: Array<InteractiveMenuItem<InteractiveAction>> = [
   { value: "run", label: "识别图片", description: "对图片执行视觉识别（PP-OCRv6 / + YOLO Web 模式）" },
   { value: "init", label: "重新初始化", description: "重装视觉模型环境" },
+  { value: "reset", label: "重置环境", description: "删除模型/虚拟环境并重置为未初始化" },
   { value: "info", label: "查看环境", description: "显示 code-vcli 与系统环境信息" },
   { value: "update", label: "检查版本更新", description: "比较 npm Registry 最新版本" },
   { value: "help", label: "查看帮助", description: "显示所有命令与参数" },

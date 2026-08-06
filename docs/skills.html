@@ -34,7 +34,7 @@
         <div class="skills-hero-inner">
           <span class="skill-eyebrow">CODE-VCLI SKILL</span>
           <h1>安装 code-vcli<br /><em>视觉识别 Skill</em></h1>
-          <p>让 AI 编码模型「看见」屏幕 — 本地截图转文本，支持普通 OCR 与网页 UI 元素解析。</p>
+          <p>让 AI 编码模型「看见」屏幕 — 本地截图转文本，支持 OCR、VLM 视觉理解与 Mix 混合模式。</p>
           <div class="skill-install-center">
             <div class="skill-quick-start">
               <strong>快速开始</strong>
@@ -56,30 +56,41 @@
       <section class="skills-section" aria-labelledby="mode-title">
         <div class="section-heading">
           <span class="kicker">MODES</span>
-          <h2 id="mode-title">两种识别模式</h2>
-          <p>根据图片类型选择普通模式或 Web 模式。</p>
+          <h2 id="mode-title">三种识别模式</h2>
+          <p>根据需求选择 OCR、VLM 或 Mix 模式。</p>
         </div>
         <div class="mode-grid">
           <article class="mode-card recommended">
             <div class="mode-top"><span class="mode-symbol">OCR</span><b>推荐</b></div>
-            <h3>普通模式（PP-OCRv6）</h3>
+            <h3>OCR 模式（PP-OCRv6）</h3>
             <p>整图 OCR，速度快、带坐标。适合文档、扫描件、纯文字图片。</p>
             <div class="cmd-block"><code>vcli run ./image.png --json</code></div>
             <ul>
               <li>PP-OCRv6（RapidOCR + OpenVINO）</li>
-              <li>支持中英日等 50 种语言</li>
               <li>返回文字 + 置信度 + 坐标</li>
+              <li>可选 <code>--web</code> 叠加 YOLO UI 元素检测</li>
             </ul>
           </article>
           <article class="mode-card cli-card">
-            <div class="mode-top"><span class="mode-symbol">WEB</span><b>Web 模式</b></div>
-            <h3>Web 模式（+ YOLO）</h3>
-            <p>叠加 YOLO UI 元素检测，把文字归到对应元素上。适合网页 / UI 截图。</p>
-            <div class="cmd-block"><code>vcli run ./webpage.png --web --json</code></div>
+            <div class="mode-top"><span class="mode-symbol">VLM</span><b>视觉理解</b></div>
+            <h3>VLM 模式（Qwen2.5-VL）</h3>
+            <p>看懂画面含义、回答关于图片的问题，返回意图与总结。需 GPU + 8GB 显存。</p>
+            <div class="cmd-block"><code>vcli run ./image.png --vlm --json</code></div>
             <ul>
-              <li>OmniParser V2 YOLO 检测 UI 元素</li>
-              <li>通过 IoU、中心点距离、面积比合并文字</li>
-              <li>输出 ui_text / ui_element 结构</li>
+              <li>Qwen2.5-VL 7B（transformers）</li>
+              <li>返回 intent / summary / elements</li>
+              <li>量化按显存推荐（BF16 16GB+ / AWQ 8-15GB）</li>
+            </ul>
+          </article>
+          <article class="mode-card cli-card">
+            <div class="mode-top"><span class="mode-symbol">MIX</span><b>先定位再理解</b></div>
+            <h3>Mix 模式（OCR + VLM）</h3>
+            <p>先 OCR 提取文字，再把文字注入 VLM，兼备定位与理解。</p>
+            <div class="cmd-block"><code>vcli run ./image.png --mix --json</code></div>
+            <ul>
+              <li>顺序执行：OCR → 释放 → VLM</li>
+              <li>文字注入 VLM，先定位再理解</li>
+              <li>需 GPU 模式且同时安装 OCR 与 VLM（both）</li>
             </ul>
           </article>
         </div>
@@ -87,10 +98,10 @@
           <span class="privacy-mark" aria-hidden="true">🔒</span>
           <div>
             <strong>本地推理，图片不上传</strong>
-            <p>推理完全在本地完成，无遥测。首次 <code>vcli init</code> 需下载模型约 1-2 GB。</p>
+            <p>推理完全在本地完成，无遥测。首次 <code>vcli init</code> 需下载模型：OCR 约 1-2 GB；VLM（Qwen2.5-VL 7B）另需约 8-16 GB，且需 GPU + 8GB 以上显存。</p>
           </div>
         </div>
-        <p class="mode-retention">不确定图片类型时，先向用户确认是「网页/UI」还是「普通文档」再选择模式。</p>
+        <p class="mode-retention">不确定图片类型时，先向用户确认是「网页/UI」还是「普通文档」再选择模式；需要读懂画面含义时用 <code>--vlm</code> 或 <code>--mix</code>。</p>
       </section>
 
       <section class="skills-section install-section" id="install-skill" aria-labelledby="install-title">

@@ -1,4 +1,4 @@
-import type { VisionOcrEngineType } from "./constants.js";
+import type { VisionOcrEngineType, ComputeCapability, OcrBackend, VisionMode } from "./constants.js";
 
 export interface VisionGeometry {
   aspect: number;
@@ -30,10 +30,22 @@ export interface VisionItem {
   cluster?: VisionCluster;
 }
 
+export interface VlmElement {
+  role?: string;
+  text?: string;
+  position?: string;
+}
+
 export interface VisionRecognitionResult {
   text: string;
   items: VisionItem[];
   layout?: VisionLayout;
+  mode?: VisionMode;
+  intent?: string;
+  summary?: string;
+  elements?: VlmElement[];
+  raw?: string;
+  engine?: string;
 }
 
 export type VisionFeatureStatus =
@@ -52,6 +64,10 @@ export interface VisionFeatureState {
   arch: string;
   installed_at: string;
   verified: boolean;
+  computeMode: "cpu" | "gpu";
+  capabilities: ComputeCapability;
+  ocrBackend?: OcrBackend;
+  vlmQuantization?: string;
 }
 
 export interface VisionStatusOutput {
@@ -75,6 +91,11 @@ export interface PythonOutput {
   engine?: string;
   ocr?: string;
   model?: string;
+  mode?: VisionMode;
+  intent?: string;
+  summary?: string;
+  elements?: VlmElement[];
+  raw?: string;
   error?: {
     code: string;
     message: string;

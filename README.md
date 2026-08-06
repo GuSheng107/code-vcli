@@ -4,7 +4,7 @@ AI 编码模型（如 GLM、DeepSeek、Qwen-max）能写代码，但**无法「�
 
 `code-vcli` 给它们一双眼睛：把截图 / 网页截图 / 文档图片转成结构化文本和 JSON，让没有视觉能力的模型也能看懂 UI 布局、按钮位置、卡片结构，准确完成 web 开发任务。
 
-推理在本地完成，图片不上传。
+支持三条识别路线：**纯 OCR**（PP-OCRv6）、**纯 VLM**（Qwen2.5-VL 视觉理解与意图识别）、**OCR + VLM 混合**（先 OCR 再把文字注入 VLM，先定位再理解）。推理在本地完成，图片不上传。
 
 文档站：https://gusheng107.github.io/code-vcli/
 
@@ -56,11 +56,18 @@ which vcli
 
 ## 初始化
 
-首次使用先初始化环境（创建 venv、选计算模式、下载模型，约 1-2 GB）：
+首次使用先初始化环境（创建 venv、选择计算模式与能力、下载模型）：
 
 ```bash
 vcli init
 ```
+
+初始化时按提示选择：
+
+- **计算模式**：`CPU`（仅 OCR）或 `GPU`（可装 OCR 和/或 VLM）。
+- **能力组合**（GPU 模式）：`仅 OCR` / `仅 VLM` / `都要`（`--mix` 需要两者）。
+- **OCR 放置**（GPU + 含 OCR 时）：OCR 跑 `CPU` 还是 `GPU`，推荐 CPU 省显存给 VLM。
+- **VLM 量化**（含 VLM 时）：根据显存自动推荐 `BF16`（16GB+）或 `AWQ INT4`（8-15GB），需确认。
 
 跳过交互用默认值：
 
@@ -69,7 +76,9 @@ vcli init --yes
 vcli init --yes --workspace "E:\code-vcli-data"
 ```
 
-> 升级 code-vcli 后，已安装的环境会通过 `vcli init` 自动同步最新推理脚本到工作区，无需重新下载模型。
+> 已安装环境再次运行 `vcli init` 会先询问是否卸载现有能力：输入 `n`（默认）保留现有安装，仅增量增补/调整能力（例如为「仅 OCR」增加 VLM）；输入 `y` 则卸载后全新安装。系统自动对比差异，只下载新增模型、复用 venv/PyTorch 等共同依赖。
+>
+> 升级 code-vcli 后，已安装的环境通过 `vcli init` 自动同步最新推理脚本到工作区，无需重新下载模型。
 
 初始化会在工作区下自动创建 `files/` 文件夹，建议把待识别的截图统一放到这里方便管理。通过 `vcli info` 可查看当前工作区路径。
 
@@ -83,11 +92,24 @@ vcli init --yes --workspace "E:\code-vcli-data"
 ## 使用
 
 ```bash
-vcli run ./image.png              # 普通模式：整图 OCR
-vcli run ./screenshot.png --web   # Web 模式：网页截图，叠加 YOLO 元素检测
+vcli run ./image.png              # OCR 模式：整图 OCR（PP-OCRv6）
+vcli run ./screenshot.png --web   # OCR + Web：网页截图，叠加 YOLO 元素检测
 vcli run ./image.png --json       # JSON 输出（自动保存到工作区 files/，返回文件路径）
+vcli run ./webpage.png --vlm      # VLM 模式：Qwen2.5-VL 视觉理解与意图识别（需已装 VLM）
+vcli run ./webpage.png --mix      # Mix 模式：先 OCR 再把文字注入 VLM（需已装 both）
+vcli run ./image.png --vlm -p "这张页面主要的操作是什么？"
 vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下的截图
 ```
+
+识别模式：
+
+| 模式 | 说明 | 命令 |
+| --- | --- | --- |
+| `--ocr`（默认） | 纯 OCR，PP-OCRv6，可选 `--web` | `vcli run ./image.png` |
+| `--vlm` | 纯 VLM 视觉理解与意图识别，返回 JSON 意图 | `vcli run ./image.png --vlm` |
+| `--mix` | 先 OCR 再注入 VLM，先定位再理解 | `vcli run ./image.png --mix` |
+
+> `--vlm` / `--mix` 需要 GPU 模式且已安装 VLM 能力（`--mix` 还需 OCR）。未安装时会在初始化界面选择对应能力后使用。
 
 ### AI 调用场景
 
@@ -154,6 +176,9 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 ```text
 <image>                    图片路径（必填）
     --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
+    --vlm                  使用 VLM 视觉理解（Qwen2.5-VL，需已装 VLM 能力）
+    --mix                  OCR + VLM 顺序执行，先 OCR 再注入（需已装 both）
+-p, --prompt <text>        VLM/--mix 模式自定义问题（默认有内置模板）
 -w, --web                  网页/UI 场景
     --json                 输出 AI 可读的 JSON（自动保存到工作区 files/）
     --timeout <seconds>    推理超时
@@ -166,6 +191,7 @@ npx skills add GuSheng107/code-vcli --skill code-vcli -g
 
 - PP-OCRv6（RapidOCR + OpenVINO）：整图 OCR，速度快，带坐标
 - OmniParser V2 YOLO：UI 元素检测（`--web` 启用）
+- Qwen2.5-VL 7B（transformers）：VLM 视觉理解与意图识别（`--vlm` / `--mix` 启用，需 GPU）。显存 16GB+ 用 BF16，8-15GB 用 AWQ INT4
 
 ## 隐私和安全
 

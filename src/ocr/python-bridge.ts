@@ -5,8 +5,9 @@ import path from "node:path";
 import {
   VISION_SCRIPT_FILE_NAME,
   VISION_VENV_DIR_NAME,
+  VLM_REQUEST_TIMEOUT,
 } from "./constants.js";
-import type { VisionOcrEngineType } from "./constants.js";
+import type { VisionOcrEngineType, VisionMode, ComputeCapability } from "./constants.js";
 import { VcliError } from "../errors.js";
 import type { VisionStateStore } from "./feature-state.js";
 import type { VisionRecognitionResult, PythonOutput } from "./types.js";
@@ -14,6 +15,8 @@ import type { VisionRecognitionResult, PythonOutput } from "./types.js";
 interface PythonBridgeOptions {
   timeoutMs?: number;
   minConfidence?: number;
+  mode?: VisionMode;
+  prompt?: string;
 }
 
 export function getVenvPython(featureDirectory: string): string {
@@ -40,12 +43,16 @@ export async function runModelInit(
   pythonPath: string,
   scriptPath: string,
   configRoot: string,
+  compute: ComputeCapability = "both",
+  quant?: string,
 ): Promise<void> {
+  const initArgs = ["--init", "--compute", compute];
+  if (quant) initArgs.push("--quant", quant);
   const output = await executePython(
     pythonPath,
     scriptPath,
-    ["--init"],
-    { timeoutMs: 30 * 60_000, env: { VCLI_CONFIG_ROOT: configRoot } },
+    initArgs,
+    { timeoutMs: 60 * 60_000, env: { VCLI_CONFIG_ROOT: configRoot } },
   );
   if (!output.ok) {
     const code = output.error?.code ?? "MODEL_DOWNLOAD_FAILED";
@@ -62,12 +69,13 @@ export async function runModelSelfTest(
   pythonPath: string,
   scriptPath: string,
   configRoot: string,
+  compute: ComputeCapability = "both",
 ): Promise<boolean> {
   try {
     const output = await executePython(
       pythonPath,
       scriptPath,
-      ["--self-test"],
+      ["--self-test", "--compute", compute],
       { timeoutMs: 10 * 60_000, env: { VCLI_CONFIG_ROOT: configRoot } },
     );
     return output.ok;
@@ -111,6 +119,8 @@ export async function runVisionInference(
   }
 
   const args = ["--image", imagePath, "--ocr", ocrEngine];
+  if (options.mode) args.push("--mode", options.mode);
+  if (options.prompt) args.push("--prompt", options.prompt);
   if (webMode) {
     args.push("--web");
     if (options.minConfidence !== undefined) {
@@ -118,11 +128,17 @@ export async function runVisionInference(
     }
   }
 
+  const isVlm = options.mode === "vlm" || options.mode === "mix";
+  const timeoutMs = options.timeoutMs ?? (isVlm ? VLM_REQUEST_TIMEOUT : undefined);
   const output = await executePython(
     pythonPath,
     scriptPath,
     args,
-    { ...options, env: { VCLI_CONFIG_ROOT: stateStore.directory } },
+    {
+      ...options,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      env: { VCLI_CONFIG_ROOT: stateStore.directory },
+    },
   );
 
   if (output.ok === false) {
@@ -132,7 +148,7 @@ export async function runVisionInference(
   }
 
   const items = output.items ?? [];
-  if (items.length === 0) {
+  if (items.length === 0 && !isVlm) {
     throw new VcliError("MODEL_TEXT_EMPTY", "未识别到文字", 6);
   }
 
@@ -140,6 +156,12 @@ export async function runVisionInference(
     text: output.text ?? items.map((item) => item.text).join("\n"),
     items,
     ...(output.layout ? { layout: output.layout } : {}),
+    ...(output.mode ? { mode: output.mode } : {}),
+    ...(output.intent ? { intent: output.intent } : {}),
+    ...(output.summary ? { summary: output.summary } : {}),
+    ...(output.elements ? { elements: output.elements } : {}),
+    ...(output.raw ? { raw: output.raw } : {}),
+    ...(output.engine ? { engine: output.engine } : {}),
   } as VisionRecognitionResult;
 }
 

@@ -18,7 +18,7 @@ import {
   selectInteractiveMenu,
 } from "./ui.js";
 import { VisionStateStore } from "./ocr/feature-state.js";
-import { installVisionFeature, checkPythonAvailable } from "./ocr/feature-installer.js";
+import { installVisionFeature, removeVisionFeature, checkPythonAvailable } from "./ocr/feature-installer.js";
 import { runVisionInference } from "./ocr/python-bridge.js";
 import {
   PPOCR_MODEL_DISPLAY,
@@ -28,8 +28,11 @@ import {
   VISION_SUPPORTED_EXTENSIONS,
   IMAGE_MAX_BYTES,
   PYTHON_MIN_VERSION,
+  VLM_MODEL_DISPLAY,
+  type VisionMode,
 } from "./ocr/constants.js";
 import type { VisionOcrEngineType } from "./ocr/constants.js";
+import type { ComputeCapability } from "./ocr/constants.js";
 
 const DISCLAIMER = "code-vcli — 为 AI 模型提供 web 开发视觉能力的 CLI 工具";
 
@@ -56,11 +59,19 @@ Init Options:
 Run Options:
   <image>                    图片文件路径（必填）
       --ocr <ppocrv6>        OCR 引擎（默认 ppocrv6）
+      --vlm                  使用 VLM 视觉理解（Qwen2.5-VL，需已装 VLM 能力）
+      --mix                  OCR + VLM 顺序执行（先 OCR 再注入 VLM，需已装 both）
+  -p, --prompt <text>        VLM/--mix 模式自定义问题（默认有内置模板）
   -w, --web                  启用 YOLO UI 元素检测（网页/UI 场景）
       --json                 输出 AI 可读的 JSON（自动保存到工作区 files/）
       --timeout <seconds>    本次推理超时
       --min-confidence <0~1> 空 UI 元素保留阈值（默认 0.55，仅 --web 生效）
   -h, --help                 显示帮助
+
+识别模式:
+  --ocr        纯 OCR（默认，PP-OCRv6，可选 --web）
+  --vlm        纯 VLM 视觉理解与意图识别（可选 --web/--prompt）
+  --mix        OCR + VLM 顺序执行：先 OCR，再注入结果给 VLM（可选 --web/--prompt）
 
 OCR Engine:
   ppocrv6   ${PPOCR_MODEL_DISPLAY}（工业级，速度快，带坐标）
@@ -90,10 +101,12 @@ Examples:
 interface RunArguments {
   image?: string;
   ocr?: VisionOcrEngineType;
+  mode: VisionMode;
   web: boolean;
   json: boolean;
   timeoutMs?: number;
   minConfidence?: number;
+  prompt?: string;
 }
 
 function isVisionOcrEngine(value: string): value is VisionOcrEngineType {
@@ -101,12 +114,19 @@ function isVisionOcrEngine(value: string): value is VisionOcrEngineType {
 }
 
 function parseRunArguments(args: string[]): RunArguments {
-  const parsed: RunArguments = { web: false, json: false };
+  const parsed: RunArguments = { mode: "ocr", web: false, json: false };
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
       parsed.json = true;
+    } else if (arg === "--vlm") {
+      parsed.mode = "vlm";
+    } else if (arg === "--mix") {
+      parsed.mode = "mix";
+    } else if (arg === "-p" || arg === "--prompt") {
+      parsed.prompt = requireOptionValue(args, index, arg);
+      index += 1;
     } else if (arg === "--ocr") {
       const value = requireOptionValue(args, index, arg);
       if (!isVisionOcrEngine(value)) {
@@ -268,17 +288,54 @@ async function runRunCommand(
 
   const ocrEngine = parsed.ocr ?? "ppocrv6";
   const webMode = parsed.web;
-  const modeDesc = webMode ? `web + ${ocrEngine}` : ocrEngine;
+  const mode = parsed.mode;
+
+  // 能力门控：依据已安装的能力校验 --vlm/--mix
+  const visionState = await stateStore.read();
+  const capabilities: ComputeCapability = visionState?.capabilities ?? "ocr";
+  if (mode === "vlm" && !capabilities.includes("vlm")) {
+    throw new VcliError(
+      "MODEL_CAPABILITY_MISSING",
+      "当前未安装 VLM 能力。请运行 code-vcli init 并选择 仅VLM 或 都要（GPU 模式）。",
+      6,
+    );
+  }
+  if (mode === "mix" && capabilities !== "both") {
+    if (capabilities === "ocr") {
+      throw new VcliError(
+        "MODEL_CAPABILITY_MISSING",
+        "--mix 需要同时拥有 OCR 与 VLM 能力。请运行 code-vcli init 并选择 都要（GPU 模式）。",
+        6,
+      );
+    }
+    throw new VcliError(
+      "MODEL_CAPABILITY_MISSING",
+      "--mix 需要同时拥有 OCR 与 VLM 能力。当前仅安装了 VLM，尚缺 OCR。请重新运行 code-vcli init 并选择 都要。",
+      6,
+    );
+  }
+
+  const modeDesc = mode === "ocr"
+    ? (webMode ? `web + ${ocrEngine}` : ocrEngine)
+    : (webMode ? `${mode} + web` : mode);
   stderr.write(`正在识别…（模式：${modeDesc}）\n`);
 
   const result = await runVisionInference(stateStore, imagePath, ocrEngine, webMode, {
     ...(parsed.timeoutMs ? { timeoutMs: parsed.timeoutMs } : {}),
     ...(parsed.minConfidence !== undefined ? { minConfidence: parsed.minConfidence } : {}),
+    ...(mode !== "ocr" ? { mode } : {}),
+    ...(parsed.prompt ? { prompt: parsed.prompt } : {}),
   });
 
   if (parsed.json) {
     const payload = {
       text: result.text,
+      ...(mode !== "ocr" && result.intent ? { intent: result.intent } : {}),
+      ...(mode !== "ocr" && result.summary ? { summary: result.summary } : {}),
+      ...(mode !== "ocr" && result.elements ? { elements: result.elements } : {}),
+      ...(mode !== "ocr" && result.raw ? { raw: result.raw } : {}),
+      ...(mode !== "ocr" && result.engine ? { engine: result.engine } : {}),
+      ...(mode !== "ocr" && result.mode ? { mode: result.mode } : {}),
       items: result.items,
       ...(result.layout ? { layout: result.layout } : {}),
     };
@@ -337,9 +394,20 @@ async function runInfoCommand(
     `模型目录：${path.join(configStatus.workspace, "models")}`,
     `venv 目录：${path.join(configStatus.workspace, "venv")}`,
     "",
+    "已安装能力",
+    "----------",
+    `计算模式：${visionState?.computeMode ?? "—"}`,
+    `能力组合：${describeCapabilities(visionState?.capabilities ?? "ocr")}`,
+    `OCR 放置：${visionState?.ocrBackend ?? "—"}`,
+    `VLM 量化：${visionState?.vlmQuantization ?? "—"}`,
+    "",
     "OCR 引擎",
     "----------",
     `ppocrv6   — ${PPOCR_MODEL_DISPLAY}（工业级，速度快，带坐标）`,
+    "",
+    "VLM 引擎",
+    "----------",
+    `${VLM_MODEL_DISPLAY}（视觉理解与意图识别，--vlm / --mix 启用）`,
     "",
     "Web 模式",
     "----------",
@@ -348,6 +416,29 @@ async function runInfoCommand(
     `下载大小（首次 init）：${VISION_DOWNLOAD_SIZE_ESTIMATE}`,
   ];
   stdout.write(`${lines.join("\n")}\n`);
+}
+
+function describeCapabilities(capabilities: ComputeCapability): string {
+  switch (capabilities) {
+    case "vlm":
+      return "仅 VLM";
+    case "both":
+      return "OCR + VLM";
+    default:
+      return "仅 OCR";
+  }
+}
+
+function describeCurrentCapabilities(
+  state: Awaited<ReturnType<VisionStateStore["read"]>> | null,
+): string {
+  if (!state) return "  未检测到已安装能力";
+  return [
+    `  计算模式：${state.computeMode === "gpu" ? "GPU" : "CPU"}`,
+    `  能力组合：${describeCapabilities(state.capabilities)}`,
+    ...(state.ocrBackend ? [`  OCR 放置：${state.ocrBackend === "gpu" ? "GPU" : "CPU"}`] : []),
+    ...(state.vlmQuantization ? [`  VLM 量化：${state.vlmQuantization}`] : []),
+  ].join("\n");
 }
 
 async function runVersionCommand(args: string[]): Promise<void> {
@@ -419,8 +510,36 @@ async function runInteractive(configStore: ConfigStore): Promise<void> {
     clearScreen();
     try {
       if (action === "init") {
-        renderInteractivePage(packageInfo.version, initialized, items, "初始化视觉模型环境");
-        await runInitCommand(configStore, stateStore, []);
+        if (initialized) {
+          // 重新初始化：先确认是否卸载现有能力，随后无论 y/n 都进入能力安装界面
+          renderInteractivePage(packageInfo.version, initialized, items, "调整视觉模型能力");
+          const current = await stateStore.read();
+          const currentDesc = describeCurrentCapabilities(current);
+
+          const uninstallInput = (await promptText(
+            [
+              "检测到已安装的视觉能力：",
+              `\n${currentDesc}\n`,
+              "是否先卸载现有能力，再进行全新安装？",
+              "  · y：卸载模型与依赖后重新安装",
+              "  · n（默认）：保留现有能力，仅增补/调整新能力（例如为仅 OCR 增加 VLM）",
+              "",
+              "请选择 [y/n]（回车默认 n）：",
+            ].join("\n"),
+          )).trim().toLowerCase();
+
+          if (uninstallInput === "y" || uninstallInput === "yes") {
+            await removeVisionFeature(stateStore, configStatus.workspace);
+            stdout.write("已卸载现有能力。\n");
+          } else {
+            stdout.write("保留现有能力，将进入能力选择界面进行增补调整。\n");
+          }
+          // 无论是否卸载，都进入能力安装界面；系统自动对比差异做增量增删
+          await runInitCommand(configStore, stateStore, []);
+        } else {
+          renderInteractivePage(packageInfo.version, initialized, items, "初始化视觉模型环境");
+          await runInitCommand(configStore, stateStore, []);
+        }
       } else if (action === "run") {
         if (!initialized) {
           stderr.write("视觉模型尚未安装，请先运行 init。\n");
@@ -429,10 +548,13 @@ async function runInteractive(configStore: ConfigStore): Promise<void> {
           const imagePath = (await promptText("图片路径：")).trim();
           if (!imagePath) continue;
 
+          const modeInput = (await promptText("识别模式：1) OCR  2) VLM  3) Mix（回车默认 1）：")).trim();
+          const mode = modeInput === "2" ? "vlm" : modeInput === "3" ? "mix" : "ocr";
+
           const webInput = (await promptText("网页/UI 场景？ [y/n]（回车默认 n）：")).trim().toLowerCase();
           const webMode = webInput === "y" || webInput === "yes";
 
-          const runArgs = [imagePath, "--ocr", "ppocrv6"];
+          const runArgs = [imagePath, `--${mode}`];
           if (webMode) runArgs.push("--web");
           await runRunCommand(stateStore, runArgs);
         }
@@ -456,6 +578,19 @@ async function runInteractive(configStore: ConfigStore): Promise<void> {
       } else if (action === "help") {
         clearScreen();
         stdout.write(HELP);
+      } else if (action === "reset") {
+        renderInteractivePage(packageInfo.version, initialized, items, "重置视觉模型环境");
+        const workspace = configStatus.workspace;
+        const confirm = (await promptText(
+          `将删除工作区 ${workspace} 下的虚拟环境、模型权重与状态文件，并重置为未初始化。\n确认重置？ [y/n]（回车默认 n）：`,
+        )).trim().toLowerCase();
+        if (confirm === "y" || confirm === "yes") {
+          await removeVisionFeature(stateStore, workspace);
+          await configStore.reset();
+          stdout.write("环境已重置。\n");
+        } else {
+          stdout.write("已取消重置。\n");
+        }
       }
     } catch (error) {
       const vcliError = toVcliError(error);
