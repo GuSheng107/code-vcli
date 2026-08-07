@@ -45,6 +45,7 @@ import {
 } from "./ocr/constants.js";
 import type { VisionOcrEngineType } from "./ocr/constants.js";
 import type { ComputeCapability, ComputeMode, OcrBackend, VlmModelOptionId, VlmQuantization } from "./ocr/constants.js";
+import type { VisionRecognitionResult } from "./ocr/types.js";
 
 const DISCLAIMER = "code-vcli — 为 AI 模型提供 web 开发视觉能力的 CLI 工具";
 
@@ -87,7 +88,7 @@ Run Options:
       --mix                     OCR 与 VLM 顺序执行，完整 OCR 另存 artifact
   -p, --prompt <text>           VLM/Mix 附加问题（拼接在默认提示词后）
   -w, --web                     YOLO 网页/UI 元素检测
-      --json                    保存紧凑 JSON，stdout 返回文件路径
+      --json                    保存 JSON 到工作区 files/，stdout 返回文件路径
       --timeout <seconds>       推理超时
       --min-confidence <0~1>    Web 空 UI 元素阈值（默认 0.55）
       --ocr-backend <cpu|gpu>   本次 OCR/Mix 覆盖 OCR 位置
@@ -136,6 +137,29 @@ interface RunArguments {
   prompt?: string;
   ocrBackend?: OcrBackend;
   mixOcrContextTokens?: number;
+}
+
+/** 普通 OCR 只输出文字结果；坐标、元素和布局结构仅由 --web 输出。 */
+export function buildPlainOcrJsonPayload(result: VisionRecognitionResult): Record<string, unknown> {
+  return {
+    text: result.text,
+    mode: "ocr",
+    ...(result.engine ? { engine: result.engine } : {}),
+  };
+}
+
+export async function writePlainOcrJsonOutput(
+  workspaceDirectory: string,
+  imagePath: string,
+  result: VisionRecognitionResult,
+): Promise<string> {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const filesDirectory = path.join(workspaceDirectory, "files");
+  await mkdir(filesDirectory, { recursive: true });
+  const imageName = path.basename(imagePath, path.extname(imagePath));
+  const outputPath = path.join(filesDirectory, `${imageName}_ocr_output.json`);
+  await writeFile(outputPath, JSON.stringify(buildPlainOcrJsonPayload(result)), "utf8");
+  return outputPath;
 }
 
 function isVisionOcrEngine(value: string): value is VisionOcrEngineType {
@@ -498,6 +522,12 @@ async function runRunCommand(
   });
 
   if (parsed.json) {
+    if (mode === "ocr" && !webMode) {
+      const outputPath = await writePlainOcrJsonOutput(stateStore.directory, imagePath, result);
+      stdout.write(`${outputPath}\n`);
+      return;
+    }
+
     const { mkdir, writeFile } = await import("node:fs/promises");
     const filesDir = path.join(stateStore.directory, "files");
     await mkdir(filesDir, { recursive: true });

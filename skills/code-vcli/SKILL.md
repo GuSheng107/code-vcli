@@ -5,7 +5,7 @@ description: 使用 vcli 为没有多模态能力的 AI Agent 提供本地视觉
 
 # code-vcli
 
-`code-vcli` 把本地图片转换为文字、坐标、布局和视觉理解结果。图片不会上传，无遥测。
+`code-vcli` 把本地图片转换为文字结果；仅在 Web 模式下输出坐标和布局，也可使用 VLM 视觉理解。图片不会上传，无遥测。
 
 ## 前置检查
 
@@ -65,10 +65,10 @@ vcli init --yes --compute gpu --capabilities both --ocr-backend gpu --vlm-option
 ## 常用命令
 
 ```bash
-# 普通 OCR
+# 普通 OCR：JSON 文件只含全文、模式和引擎
 vcli run ./document.png --json
 
-# 网页 OCR + YOLO + 紧凑布局
+# 网页 OCR + YOLO：输出坐标、元素和紧凑布局
 vcli run ./page.png --web --json
 
 # 纯 VLM
@@ -152,13 +152,13 @@ Mix 的主输出会提供：
 
 ## OCR/Web JSON
 
-普通 OCR 项只保留重要字段：
+普通 OCR 的 `*_ocr_output.json` 只包含全文、模式和引擎，不输出文字框坐标：
 
 ```json
-{"text":"登录","bbox":[10,20,60,40]}
+{"text":"登录\n注册","mode":"ocr","engine":"ppocrv6-cpu"}
 ```
 
-Web 项：
+只有 Web 模式才输出带坐标的结构化项：
 
 ```json
 {
@@ -193,7 +193,7 @@ Web 项：
 --vlm                           纯 VLM
 --mix                           OCR + VLM 顺序执行
 --web                           网页/UI YOLO 检测
---json                          保存紧凑 JSON，stdout 仅返回文件路径
+--json                          保存 JSON 到工作区 files/，stdout 仅返回文件路径
 -p, --prompt <text>             VLM/Mix 附加问题（拼接到默认提示词后）
 --ocr-backend <cpu|gpu>         本次 OCR/Mix 覆盖后端
 --mix-ocr-context-tokens <N>    0~32768，默认 16384

@@ -171,7 +171,7 @@
           <p class="doc-note">自定义问题：<code>vcli run ./image.png --vlm -p "这张页面主要的操作是什么？"</code></p>
           <h3 class="sub-h">识别模式</h3>
           <div class="mode-summary">
-            <div><strong>OCR 模式 <code>--ocr</code>（默认）</strong><span>整图 OCR，速度快、带坐标。PP-OCRv6（RapidOCR + OpenVINO），支持中英日等 50 种语言</span></div>
+            <div><strong>OCR 模式 <code>--ocr</code>（默认）</strong><span>整图 OCR，速度快；JSON 只保存全文、模式和引擎，不输出坐标。PP-OCRv6（RapidOCR + OpenVINO），支持中英日等 50 种语言</span></div>
             <div><strong>Web 模式 <code>-w</code></strong><span>OCR 模式下叠加 OmniParser V2 YOLO 检测 UI 元素位置，通过 IoU、中心点距离、面积比把文字归到对应元素上，按位置排序输出。空文本且置信度低于 <code>--min-confidence</code>（默认 0.55）的误检自动丢弃</span></div>
             <div><strong>VLM 模式 <code>--vlm</code></strong><span>Qwen2.5-VL 视觉理解与意图识别，返回结构化 JSON（intent / summary / elements）。适合「看懂画面含义、回答关于图片的问题」</span></div>
             <div><strong>Mix 模式 <code>--mix</code></strong><span>OCR 后释放 CPU/GPU 资源再加载 VLM；自动压缩 OCR，完整文字/坐标另存 artifact</span></div>
@@ -241,10 +241,10 @@
           <div class="doc-index">09</div>
           <span class="kicker">OUTPUT</span>
           <h2>JSON 与错误码</h2>
-          <p class="doc-lead"><code>run --json</code>：成功写入 stdout，失败写入 stderr。</p>
+          <p class="doc-lead"><code>run --json</code>：结果保存到工作区 <code>files/</code>，stdout 只返回文件路径；普通 OCR 为纯文字 JSON，Web 模式才包含坐标和布局。</p>
           <div class="output-grid">
             <div class="output-card success-card">
-              <div class="output-header"><span>SUCCESS</span><b>EXIT 0</b></div>
+              <div class="output-header"><span>WEB SUCCESS</span><b>EXIT 0</b></div>
               <pre><code>{
   "text": "第一行\n第二行",
   "items": [
@@ -281,7 +281,7 @@
           <div class="opt-table">
             <div class="opt-row opt-head"><span>字段</span><span>类型</span><span>说明</span></div>
             <div class="opt-row"><code>text</code><span>string</span><span>全文识别结果，各项用 \n 连接</span></div>
-            <div class="opt-row"><code>items</code><span>array</span><span>识别项数组</span></div>
+            <div class="opt-row"><code>items</code><span>array</span><span>Web/Mix 结构化识别项；普通 OCR 不输出</span></div>
             <div class="opt-row"><code>layout</code><span>object</span><span>仅 Web 模式：页面级布局分析（聚类、页面模式、文字密度）</span></div>
             <div class="opt-row"><code>intent</code><span>string</span><span>仅 VLM/Mix：VLM 推断的页面/图片意图（如 login / dashboard）</span></div>
             <div class="opt-row"><code>summary</code><span>string</span><span>仅 VLM/Mix：VLM 对画面内容的自然语言总结</span></div>

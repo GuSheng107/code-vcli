@@ -96,7 +96,7 @@ vcli init --yes --compute gpu --capabilities both --ocr-backend gpu --vlm-option
 ```bash
 vcli run ./image.png              # OCR 模式：整图 OCR（PP-OCRv6）
 vcli run ./screenshot.png --web   # OCR + Web：网页截图，叠加 YOLO 元素检测
-vcli run ./image.png --json       # JSON 输出（自动保存到工作区 files/，返回文件路径）
+vcli run ./image.png --json       # 纯 OCR JSON：只含全文/模式/引擎，保存到工作区 files/
 vcli run ./webpage.png --vlm      # VLM 模式：Qwen2.5-VL 视觉理解与意图识别（需已装 VLM）
 vcli run ./webpage.png --mix      # Mix：OCR 后释放资源，再加载 VLM
 vcli run ./webpage.png --mix --ocr-backend cpu   # CPU OCR + GPU VLM
@@ -118,7 +118,7 @@ vcli run ~/.code-vcli/files/login.png --web --json   # 直接引用 files/ 下�
 
 ### AI 调用场景
 
-给 AI Agent 调用时建议始终带 `--json`：
+给 AI Agent 调用时建议始终带 `--json`。普通 OCR 的 JSON 只保存全文、模式和引擎；只有 `--web` 会额外输出文字框坐标、UI 元素和页面布局：
 
 ```bash
 vcli run ./webpage.png --web --json
@@ -142,7 +142,7 @@ vcli run ./page.png --vlm -p "结合我提取的关键字段，判断页面的�
 
 也可用 `--mix-ocr-context-tokens 0` 禁止 Mix 自动注入 OCR，仅保留 OCR artifact 与图像理解。
 
-输出示例：
+Web 模式输出示例：
 
 ```json
 {

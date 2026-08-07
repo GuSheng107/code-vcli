@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
+  buildPlainOcrJsonPayload,
+  writePlainOcrJsonOutput,
   parseInitArguments,
   parseRunArguments,
   supportsVisionMode,
@@ -27,6 +32,44 @@ test("both 能力支持 OCR、VLM 和 Mix", () => {
 test("run 参数拒绝冲突模式和多图片", () => {
   assert.throws(() => parseRunArguments(["a.png", "--vlm", "--mix"]), /不能同时使用/);
   assert.throws(() => parseRunArguments(["a.png", "b.png"]), /只能指定一个图片路径/);
+});
+
+test("普通 OCR JSON 不暴露坐标和布局结构", () => {
+  const payload = buildPlainOcrJsonPayload({
+    text: "第一行\n第二行",
+    mode: "ocr",
+    engine: "ppocrv6-cpu",
+    items: [{ text: "第一行", bbox: [10, 20, 80, 40] }],
+    layout: { page_type: "document" },
+  });
+
+  assert.deepEqual(payload, {
+    text: "第一行\n第二行",
+    mode: "ocr",
+    engine: "ppocrv6-cpu",
+  });
+  assert.equal("items" in payload, false);
+  assert.equal("layout" in payload, false);
+});
+
+test("普通 OCR JSON 写入工作区 files 目录", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "code-vcli-output-"));
+  try {
+    const outputPath = await writePlainOcrJsonOutput(workspace, path.join(workspace, "input", "receipt.png"), {
+      text: "合计 128.00 元",
+      items: [{ text: "合计 128.00 元", bbox: [12, 30, 160, 58] }],
+      engine: "ppocrv6-cpu",
+    });
+
+    assert.equal(outputPath, path.join(workspace, "files", "receipt_ocr_output.json"));
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), {
+      text: "合计 128.00 元",
+      mode: "ocr",
+      engine: "ppocrv6-cpu",
+    });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("GPU Mix 初始化参数可完整解析", () => {
