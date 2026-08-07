@@ -41,6 +41,7 @@ export interface VlmElement {
 export interface VlmAnnotation {
   text?: string;
   position?: [number, number] | string;
+  target?: string;
 }
 
 export interface VlmLayoutInfo {

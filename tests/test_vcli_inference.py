@@ -62,5 +62,41 @@ class MixContextTests(unittest.TestCase):
         self.assertTrue(stats["truncated"])
 
 
+class VlmPromptTests(unittest.TestCase):
+    def test_vlm_prompt_appends_p_after_default_task(self):
+        prompt = module.build_vlm_user_prompt("只列出主要按钮")
+        self.assertTrue(prompt.startswith(module.VLM_DEFAULT_PROMPT))
+        self.assertTrue(prompt.endswith("只列出主要按钮"))
+        self.assertNotIn("<ocr-evidence>", prompt)
+
+    def test_mix_prompt_places_ocr_before_p(self):
+        ocr_context = "#0 @50,10,20,5 text 导出报表"
+        prompt = module.build_vlm_user_prompt("判断批注要求", ocr_context)
+        self.assertLess(prompt.index(ocr_context), prompt.index("判断批注要求"))
+        self.assertIn("<ocr-evidence>", prompt)
+        self.assertIn("</ocr-evidence>", prompt)
+
+    def test_system_prompts_are_generic_and_forbid_uncertain_output(self):
+        self.assertIn("禁止猜测", module.VLM_SYSTEM_PROMPT)
+        self.assertIn("无法可靠确认的内容直接省略", module.VLM_SYSTEM_PROMPT)
+        self.assertIn("OCR 结果为主要依据", module.MIX_SYSTEM_PROMPT)
+        for customized_term in ("红色", "箭头", "圈选", "气泡", "网页"):
+            self.assertNotIn(customized_term, module.VLM_SYSTEM_PROMPT)
+            self.assertNotIn(customized_term, module.VLM_DEFAULT_PROMPT)
+
+    def test_vlm_output_normalizes_bbox_and_keeps_all_records(self):
+        records = module._normalize_vlm_records([
+            {"role": "button", "text": "Export", "position": [100, 20, 200, 60]},
+            {"text": "Export", "position": [100, 20, 200, 60]},
+            {"text": "按钮需要调整", "position": [20, 10, 80, 30]},
+            "not an object",
+        ])
+        self.assertEqual(records, [
+            {"role": "button", "text": "Export", "position": [150, 40]},
+            {"text": "Export", "position": [150, 40]},
+            {"text": "按钮需要调整", "position": [50, 20]},
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()
